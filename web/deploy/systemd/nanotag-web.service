@@ -1,0 +1,24 @@
+[Unit]
+Description=NanoTag web server (Flask + Dash Tagger)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nanotag
+Group=nanotag
+EnvironmentFile=/etc/nanotag/nanotag.env
+Environment=PYTHONPATH=/opt/nanotag/current
+WorkingDirectory=/opt/nanotag/current
+ExecStart=/opt/nanotag/venv/bin/gunicorn --bind ${NANOTAG_BIND}:${NANOTAG_PORT} \
+    --workers ${NANOTAG_WEB_WORKERS} --threads 8 --timeout 900 --graceful-timeout 30 \
+    --access-logfile - --error-logfile - --no-control-socket nanotag.wsgi:app
+RuntimeDirectory=nanotag
+Restart=on-failure
+RestartSec=5
+UMask=0002
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

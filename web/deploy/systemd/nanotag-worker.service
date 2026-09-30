@@ -1,0 +1,23 @@
+[Unit]
+Description=NanoTag job worker (ingest, NN landmarks, clustering)
+After=network-online.target nanotag-web.service
+
+[Service]
+Type=simple
+User=nanotag
+Group=nanotag
+EnvironmentFile=/etc/nanotag/nanotag.env
+Environment=PYTHONPATH=/opt/nanotag/current
+WorkingDirectory=/opt/nanotag/current
+ExecStart=/opt/nanotag/venv/bin/python -m nanotag.worker
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=30
+UMask=0002
+NoNewPrivileges=true
+PrivateTmp=true
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

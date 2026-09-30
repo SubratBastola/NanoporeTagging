@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Experiments{% endblock %}
+{% block content %}
+<h1>Experiments</h1>
+<div class="card">
+  <table class="t">
+    <tr><th>Name</th><th>Recordings</th><th>Size</th><th>Sensor / analytes / solution</th><th>Created</th><th></th></tr>
+    {% for e in exps %}{% set s = stats.get(e.id) %}
+    <tr>
+      <td><a href="{{ url_for('experiment', exp_id=e.id) }}"><b>{{ e.name }}</b></a>
+        {% if e.restricted %}<span class="badge locked">restricted</span>{% endif %}
+        <div class="muted small">{{ e.description }}</div></td>
+      <td>{{ s.ready if s else 0 }} / {{ s.n if s else 0 }} ready</td>
+      <td>{{ fmt_bytes(s.bytes) if s else '' }}</td>
+      <td class="small">{{ e.sensor }} · {{ e.analytes }} · {{ e.solution }}</td>
+      <td class="small">{{ fmt_ts(e.created_at) }}<br>{{ e.created_by }}</td>
+      <td><a class="btn" href="{{ url_for('experiment', exp_id=e.id) }}">Open</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">No experiments yet — create one below.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <h2 style="margin-top:0">New experiment</h2>
+    <form method="post" action="{{ url_for('experiment_new') }}">
+      <p><input type="text" name="name" placeholder="Name (e.g. 2026-09-14 SiO2 100 aM)" required style="width:100%"></p>
+      <p><textarea name="description" placeholder="Description" style="width:100%" rows="2"></textarea></p>
+      <div class="row">
+        <input type="text" name="sensor" placeholder="Sensor">
+        <input type="text" name="analytes" placeholder="Analytes">
+        <input type="text" name="solution" placeholder="Solution">
+      </div>
+      <p><button class="primary">Create</button></p>
+    </form>
+  </div>
+  <div class="card">
+    <h2 style="margin-top:0">Import experiment bundle (.zip)</h2>
+    <p class="muted small">A bundle exported from this server (annotation sets, history and optionally the ABFs).
+      Recordings without an ABF in the bundle are created as “missing”; import the ABFs afterwards and they attach by file name.</p>
+    <div class="dropzone" id="bz">Drop a bundle .zip here or <label style="color:var(--accent);cursor:pointer">choose
+      <input type="file" id="bf" accept=".zip" style="display:none"></label></div>
+    <div class="uplist" id="bl"></div>
+  </div>
+</div>
+<script>
+setupUploader('bz', 'bf', 'bl', {purpose: 'bundle'}, () => setTimeout(() => location.href = '/jobs', 1500));
+</script>
+{% endblock %}

@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Job {{ j.id }}{% endblock %}
+{% block content %}
+<h1>Job #{{ j.id }} · {{ j.kind }} <span class="badge {{ j.status }}" id="st">{{ j.status }}</span></h1>
+<div class="card">
+  <div class="row"><span class="bar" style="width:300px"><i id="bar" style="width:{{ (100*(j.progress or 0))|round(1) }}%"></i></span>
+    <span id="msg">{{ j.message }}</span></div>
+  <p class="small muted">Queued {{ fmt_ts(j.created_at) }} by {{ j.created_by }} · started {{ fmt_ts(j.started_at) }} · finished {{ fmt_ts(j.finished_at) }}</p>
+  {% if j.experiment_id %}<p><a href="{{ url_for('experiment', exp_id=j.experiment_id) }}">← back to experiment</a></p>{% endif %}
+  <details><summary>Parameters</summary><pre class="small">{{ params | tojson(indent=2) }}</pre></details>
+  {% if result %}<details open><summary>Result</summary><pre class="small">{{ result | tojson(indent=2) }}</pre></details>{% endif %}
+</div>
+<h2>Log</h2>
+<pre class="log" id="log">{{ j.log }}</pre>
+<script>
+async function tick() {
+  const r = await fetch('/api/jobs/{{ j.id }}'); const d = await r.json();
+  document.getElementById('log').textContent = d.log || '';
+  document.getElementById('msg').textContent = d.message || '';
+  document.getElementById('bar').style.width = (100 * (d.progress || 0)).toFixed(1) + '%';
+  const st = document.getElementById('st'); st.textContent = d.status; st.className = 'badge ' + d.status;
+  const lg = document.getElementById('log'); lg.scrollTop = lg.scrollHeight;
+  if (d.status === 'queued' || d.status === 'running') setTimeout(tick, 2000);
+}
+{% if j.status in ['queued', 'running'] %}setTimeout(tick, 1000);{% endif %}
+</script>
+{% endblock %}

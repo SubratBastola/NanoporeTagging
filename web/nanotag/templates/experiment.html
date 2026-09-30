@@ -1,0 +1,334 @@
+{% extends "base.html" %}
+{% block title %}{{ exp.name }}{% endblock %}
+{% block content %}
+{% set first_ready = (recs | selectattr('status', 'equalto', 'ready') | list) %}
+<h1>{{ exp.name }} {% if exp.restricted %}<span class="badge locked">restricted</span>{% endif %}</h1>
+<div class="muted">{{ exp.description }}{% if exp.sensor or exp.analytes or exp.solution %} · sensor {{ exp.sensor }} ·
+  analytes {{ exp.analytes }} · solution {{ exp.solution }}{% endif %} · created {{ fmt_ts(exp.created_at) }} by {{ exp.created_by }}</div>
+
+<details class="card"><summary>Edit experiment details</summary>
+  <form method="post" action="{{ url_for('experiment_edit', exp_id=exp.id) }}">
+    <p><input type="text" name="name" value="{{ exp.name }}" required style="width:100%"></p>
+    <p><textarea name="description" rows="2" style="width:100%">{{ exp.description }}</textarea></p>
+    <div class="row"><input type="text" name="sensor" value="{{ exp.sensor }}" placeholder="Sensor">
+      <input type="text" name="analytes" value="{{ exp.analytes }}" placeholder="Analytes">
+      <input type="text" name="solution" value="{{ exp.solution }}" placeholder="Solution">
+      <button class="primary">Save</button></div>
+  </form>
+</details>
+
+<!-- ============================================================ recordings -->
+<h2>1 · Recordings ({{ recs|length }})</h2>
+<div class="card">
+  <table class="t" id="rec-table">
+    <tr><th>File</th><th>Status</th><th>Duration</th><th>Rate</th><th>Channels</th><th>Roles (electrical / optical / opt-ref)</th><th></th></tr>
+    {% for r in recs %}
+    <tr data-rec="{{ r.id }}">
+      <td><b>{{ r.file_name }}</b><div class="muted small">{{ fmt_bytes(r.size_bytes) }}</div></td>
+      <td><span class="badge {{ r.status }}" data-status>{{ r.status }}</span>
+        {% if r.error %}<div class="small" style="color:var(--err)">{{ r.error }}</div>{% endif %}</td>
+      <td>{{ fmt_dur(r.duration) }}</td>
+      <td>{% if r.fs %}{{ (r.fs/1000)|round(1) }} kHz{% endif %}</td>
+      <td class="small">{% for ch in r.channels %}{{ ch.index }}: {{ ch.name }} [{{ ch.units }}]<br>{% endfor %}</td>
+      <td>
+        <form method="post" action="{{ url_for('recording_roles', rec_id=r.id) }}" class="row">
+          {% set n = r.channels|length if r.channels else 6 %}
+          {% for key in ['role_elec', 'role_opt', 'role_optref'] %}
+          <select name="{{ key }}">{% for i in range(n) %}<option value="{{ i }}" {% if r[key] == i %}selected{% endif %}>
+            {{ i }}{% if r.channels %} {{ r.channels[i].name }}{% endif %}</option>{% endfor %}</select>
+          {% endfor %}
+          <button>Save</button>
+        </form>
+      </td>
+      <td class="row">
+        {% if r.status == 'ready' and sets %}<a class="btn primary" href="/tagger/?rec={{ r.id }}&set={{ sets[0].id }}">Tagger</a>{% endif %}
+        {% if r.abf_path %}<a class="btn" href="{{ url_for('recording_abf', rec_id=r.id) }}">ABF</a>{% endif %}
+        {% if r.abf_path %}<form method="post" action="{{ url_for('recording_reingest', rec_id=r.id) }}"><button>Re-ingest</button></form>{% endif %}
+        {% if current_user.is_admin %}
+        <form method="post" action="{{ url_for('recording_delete', rec_id=r.id) }}"
+              onsubmit="return confirm('Remove {{ r.file_name }} and all its events from this experiment?')">
+          <label class="small"><input type="checkbox" name="delete_abf" value="1"> also delete ABF</label>
+          <button class="danger">Remove</button></form>{% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="muted">No recordings yet — add ABF files below.</td></tr>
+    {% endfor %}
+  </table>
+  {% if recs %}
+  <form method="post" action="{{ url_for('recording_roles_all', exp_id=exp.id) }}" class="row" style="margin-top:8px">
+    <span class="small muted">Apply roles to all recordings:</span>
+    electrical <input type="number" name="role_elec" value="0" min="0" style="width:60px">
+    optical <input type="number" name="role_opt" value="2" min="0" style="width:60px">
+    opt-ref <input type="number" name="role_optref" value="3" min="0" style="width:60px">
+    <button>Apply to all</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <h2 style="margin-top:0">Upload ABF files</h2>
+    <p class="muted small">Large files are sent in 16 MB chunks; if the VPN drops, choose the same file again to resume.</p>
+    <div class="dropzone" id="az">Drop .abf files here or <label style="color:var(--accent);cursor:pointer">choose files
+      <input type="file" id="af" multiple accept=".abf" style="display:none"></label></div>
+    <div class="uplist" id="al"></div>
+  </div>
+  <div class="card">
+    <h2 style="margin-top:0">Import from a server folder</h2>
+    <p class="muted small">Fastest for large files: copy them onto the server (e.g. into {{ roots[0] if roots else '' }})
+      and import from here. Allowed folders: {{ roots|join(', ') }}</p>
+    <form method="post" action="{{ url_for('import_folder', exp_id=exp.id) }}">
+      <div class="row"><span id="cur-path" class="small muted"></span></div>
+      <div class="browser" id="browser">Loading…</div>
+      <div class="row" style="margin-top:6px">
+        <label><input type="radio" name="mode" value="copy" checked> copy</label>
+        <label><input type="radio" name="mode" value="link"> hard-link (same disk, instant)</label>
+        <label><input type="radio" name="mode" value="move"> move</label>
+        <button class="primary">Import selected</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ============================================================ annotation sets -->
+<h2>2 · Annotation sets</h2>
+<div class="card">
+  <table class="t">
+    <tr><th>Set</th><th>Kind</th><th>Events</th><th>Created</th><th>Last edit</th><th>Open</th><th>Export</th><th></th></tr>
+    {% for s in sets %}
+    <tr>
+      <td><b>{{ s.name }}</b> {% if s.locked %}<span class="badge locked">locked</span>{% endif %}
+        <details class="small"><summary>rename</summary>
+          <form method="post" action="{{ url_for('set_rename', set_id=s.id) }}" class="row">
+            <input type="text" name="name" value="{{ s.name }}"><button>Rename</button></form></details></td>
+      <td>{{ s.kind }}<div class="muted small">{{ 'NN formulas' if s.formula == 'nn' else 'Tagger formulas' }}</div></td>
+      <td>{{ s.n_events }}</td>
+      <td class="small">{{ s.created_by }}<br>{{ fmt_ts(s.created_at) }}</td>
+      <td class="small">{{ fmt_ts(s.last_edit) }}</td>
+      <td>{% if first_ready %}
+        <form action="/tagger/" method="get" class="row">
+          <input type="hidden" name="set" value="{{ s.id }}">
+          <select name="rec">{% for r in first_ready %}<option value="{{ r.id }}">{{ r.file_name }}</option>{% endfor %}</select>
+          <button class="primary">Tagger</button></form>{% endif %}</td>
+      <td class="small">
+        <a href="{{ url_for('set_export', set_id=s.id, fmt='csv') }}">CSV</a> ·
+        <a href="{{ url_for('set_export', set_id=s.id, fmt='xlsx') }}">XLSX</a> ·
+        <a href="{{ url_for('set_export', set_id=s.id, fmt='csv', audit=1) }}">CSV + authors</a> ·
+        <a href="{{ url_for('set_export', set_id=s.id, layout='zip') }}">per-recording ZIP</a> ·
+        <a href="{{ url_for('set_export', set_id=s.id, layout='nn', fmt='xlsx') }}">__predicted.xlsx</a> ·
+        <a href="{{ url_for('set_history', set_id=s.id) }}">edit history</a></td>
+      <td class="row">
+        {% if current_user.is_admin %}
+        <form method="post" action="{{ url_for('set_lock', set_id=s.id) }}">
+          <input type="hidden" name="locked" value="{{ 0 if s.locked else 1 }}">
+          <button>{{ 'Unlock' if s.locked else 'Lock' }}</button></form>
+        <form method="post" action="{{ url_for('set_delete', set_id=s.id) }}"
+              onsubmit="return confirm('Delete annotation set {{ s.name }} and all its events?')">
+          <button class="danger">Delete</button></form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+<div class="grid2">
+  <div class="card">
+    <h2 style="margin-top:0">New annotation set</h2>
+    <form method="post" action="{{ url_for('set_new', exp_id=exp.id) }}">
+      <div class="row"><input type="text" name="name" placeholder="Name (e.g. Oguz review)" required>
+        <select name="copy_from"><option value="">empty</option>
+          {% for s in sets %}<option value="{{ s.id }}">copy of {{ s.name }}</option>{% endfor %}</select>
+        <button class="primary">Create</button></div>
+    </form>
+  </div>
+  <div class="card">
+    <h2 style="margin-top:0">Import event files (CSV / XLSX)</h2>
+    <p class="muted small">Tagger CSVs, window lists or NN <code>__predicted.xlsx</code> files. Rows are matched to
+      recordings by <code>file_name</code>.</p>
+    <form method="post" action="{{ url_for('import_events', exp_id=exp.id) }}" enctype="multipart/form-data">
+      <p><input type="file" name="files" multiple accept=".csv,.xlsx,.xls" required></p>
+      <div class="row">
+        <select name="target_set"><option value="">→ new set</option>
+          {% for s in sets %}<option value="{{ s.id }}">→ add to {{ s.name }}</option>{% endfor %}</select>
+        <input type="text" name="new_name" placeholder="New set name (optional)">
+        <select name="formula" title="Formula for OSC etc. when the file does not provide them">
+          <option value="tagger">Tagger formulas</option><option value="nn">NN formulas</option></select>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <select name="default_recording"><option value="">rows with unknown file_name: skip</option>
+          {% for r in recs %}<option value="{{ r.id }}">rows with unknown file_name → {{ r.file_name }}</option>{% endfor %}</select>
+        <button class="primary">Import</button></div>
+    </form>
+  </div>
+</div>
+
+<!-- ============================================================ NN -->
+<h2>3 · Neural-network landmark detection</h2>
+<div class="card">
+  {% if models %}
+  <form method="post" action="{{ url_for('run_nn', exp_id=exp.id) }}" class="row">
+    <span>Windows from</span>
+    <select name="source_set_id">{% for s in sets %}<option value="{{ s.id }}">{{ s.name }} ({{ s.n_events }})</option>{% endfor %}</select>
+    <span>model</span>
+    <select name="model_id">{% for m in models %}<option value="{{ m.id }}">{{ m.name }}{% if m.is_default %} (default){% endif %}</option>{% endfor %}</select>
+    <input type="text" name="out_name" placeholder="Output set name (optional)">
+    <button class="primary">Run NN</button>
+  </form>
+  <p class="muted small">Runs NeuralNetwork.py's pipeline unchanged on every event window, reading each ABF once, with this
+    experiment's channel roles. The result is a new annotation set (formula: NN) you can review/edit in the Tagger.</p>
+  {% else %}<p class="muted">No model registered — an admin can upload a .pt checkpoint on the <a href="{{ url_for('models_page') }}">Models</a> page.</p>{% endif %}
+</div>
+
+<!-- ============================================================ clustering -->
+<h2>4 · Clustering</h2>
+<div class="card">
+  <form method="post" action="{{ url_for('run_cluster', exp_id=exp.id) }}">
+    <div class="row"><input type="text" name="name" placeholder="Run name (optional)" style="width:320px"></div>
+    <p class="small"><b>Annotation sets to pool</b> (other experiments’ sets can be pooled too):</p>
+    <div class="browser">{% for s in all_sets %}<div><label><input type="checkbox" name="set_ids" value="{{ s.id }}"
+      {% if s.exp_id == exp.id and loop.index == 1 %}{% endif %}> {{ s.label }}</label></div>{% endfor %}</div>
+    <div class="row" style="margin-top:8px">
+      α <input type="number" name="alpha" value="0.05" step="0.001" min="0.001" max="0.5" style="width:80px">
+      Max K <input type="number" name="max_k" value="8" min="2" max="10" style="width:60px">
+      Bootstraps <input type="number" name="n_boot" value="25" min="1" max="200" style="width:70px">
+      Min duration (s) <input type="number" name="duration_min" value="0" step="0.01" min="0" style="width:80px">
+      Max duration (s, 0 = none) <input type="number" name="duration_max" value="0" step="0.1" min="0" style="width:80px">
+      Min cluster size (%) <input type="number" name="min_cluster_pct" value="0" step="0.5" min="0" max="50" style="width:70px">
+      <label><input type="checkbox" name="impute" value="1" checked> median-impute partial NA</label>
+    </div>
+    <div class="row feat" style="margin-top:6px"><b class="small">Features:</b>
+      {% for f in features %}<label><input type="checkbox" name="features" value="{{ f }}" {% if f in default_features %}checked{% endif %}> {{ f }}</label>{% endfor %}
+    </div>
+    <p><button class="primary">Run clustering</button>
+      <span class="muted small">Runs clustering.py's engine (GMM sweep + sequential bootstrap LRT) and its HTML report.</span></p>
+  </form>
+  <table class="t">
+    <tr><th>Run</th><th>Sets</th><th>Status</th><th>Final K</th><th>BIC K</th><th>Events</th><th>By</th><th>Outputs</th><th></th></tr>
+    {% for r in runs %}
+    <tr>
+      <td><b>{{ r.name }}</b><div class="muted small">{{ fmt_ts(r.created_at) }}</div></td>
+      <td class="small">{{ r.set_names }}</td>
+      <td><span class="badge {{ r.status }}">{{ r.status }}</span>{% if r.job_id %} <a class="small" href="{{ url_for('job_page', job_id=r.job_id) }}">log</a>{% endif %}</td>
+      <td>{{ r.final_k or '' }}</td><td>{{ r.k_bic or '' }}</td><td>{{ r.n_events or '' }}</td>
+      <td class="small">{{ r.created_by }}</td>
+      <td class="small">{% if r.status == 'done' %}
+        <a href="{{ url_for('cluster_report', run_id=r.id) }}" target="_blank"><b>HTML report</b></a> ·
+        <a href="{{ url_for('cluster_zip', run_id=r.id) }}">all outputs (ZIP)</a> ·
+        <a href="{{ url_for('cluster_labels_csv', run_id=r.id) }}">labels CSV</a>{% endif %}</td>
+      <td>{% if current_user.is_admin or r.created_by == current_user.username %}
+        <form method="post" action="{{ url_for('cluster_delete', run_id=r.id) }}" onsubmit="return confirm('Delete this run?')">
+          <button class="danger">Delete</button></form>{% endif %}</td>
+    </tr>
+    {% else %}<tr><td colspan="9" class="muted">No clustering runs yet.</td></tr>{% endfor %}
+  </table>
+</div>
+
+<!-- ============================================================ jobs -->
+<h2>Jobs</h2>
+<div class="card">
+  <table class="t" id="jobs-table">
+    <tr><th>#</th><th>Kind</th><th>Status</th><th>Progress</th><th>Message</th><th>By</th><th>Queued</th></tr>
+    {% for j in jobs_list %}
+    <tr data-job="{{ j.id }}"><td><a href="{{ url_for('job_page', job_id=j.id) }}">{{ j.id }}</a></td><td>{{ j.kind }}</td>
+      <td><span class="badge {{ j.status }}" data-st>{{ j.status }}</span></td>
+      <td><span class="bar"><i data-bar style="width:{{ (100*(j.progress or 0))|round(1) }}%"></i></span></td>
+      <td class="small" data-msg>{{ j.message }}</td><td class="small">{{ j.created_by }}</td>
+      <td class="small">{{ fmt_ts(j.created_at) }}</td></tr>
+    {% else %}<tr><td colspan="7" class="muted">No jobs yet.</td></tr>{% endfor %}
+  </table>
+</div>
+
+<!-- ============================================================ export / admin -->
+<h2>Export</h2>
+<div class="card row">
+  <a class="btn" href="{{ url_for('experiment_bundle', exp_id=exp.id) }}">Experiment bundle (annotations only)</a>
+  <a class="btn" href="{{ url_for('experiment_bundle', exp_id=exp.id, abf=1) }}"
+     onclick="return confirm('This streams every ABF (tens of GB). Continue?')">Experiment bundle incl. ABFs</a>
+  <span class="muted small">Bundles re-import on any NanoTag server (Experiments → Import bundle).</span>
+</div>
+
+{% if current_user.is_admin %}
+<h2>Admin</h2>
+<div class="grid2">
+  <div class="card">
+    <h3 style="margin-top:0">Access</h3>
+    <form method="post" action="{{ url_for('experiment_access', exp_id=exp.id) }}">
+      <p><label><input type="checkbox" name="restricted" value="1" {% if exp.restricted %}checked{% endif %}>
+        Restrict this experiment to the users selected below (admins always have access)</label></p>
+      <div class="browser">{% for u in users %}<div><label><input type="checkbox" name="users" value="{{ u.username }}"
+        {% if u.username in access %}checked{% endif %}> {{ u.username }} {{ u.full_name }}</label></div>{% endfor %}</div>
+      <p><button class="primary">Save access</button></p>
+    </form>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Delete experiment</h3>
+    <form method="post" action="{{ url_for('experiment_delete', exp_id=exp.id) }}">
+      <p class="small">Type <b>{{ exp.name }}</b> to confirm. Annotation sets, runs and the Zarr data are removed.</p>
+      <p><input type="text" name="confirm" style="width:100%"></p>
+      <p><label><input type="checkbox" name="delete_abf" value="1"> also delete the ABF files stored for it</label></p>
+      <button class="danger">Delete experiment</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<script>
+setupUploader('az', 'af', 'al', {purpose: 'abf', experiment_id: {{ exp.id }}}, null);
+
+// ---- server folder browser
+async function browse(path) {
+  const r = await fetch('/api/browse?path=' + encodeURIComponent(path || ''));
+  const d = await r.json();
+  const box = document.getElementById('browser');
+  document.getElementById('cur-path').textContent = d.path || '';
+  if (!r.ok) { box.innerHTML = '<span style="color:#b91c1c">' + (d.error || 'error') + '</span>'; return; }
+  let h = '';
+  if (d.parent) h += `<div><a href="#" data-p="${d.parent}">⬆ ..</a></div>`;
+  for (const x of d.dirs) h += `<div>📁 <a href="#" data-p="${x}">${x.split('/').pop() || x}</a></div>`;
+  if (d.files.length) h += `<div><label><input type="checkbox" id="selall"> <i>select all</i></label></div>`;
+  for (const f of d.files) h += `<div><label><input type="checkbox" name="files" value="${f.path}"> ${f.name}
+      <span class="muted small">${fmtBytes(f.size)}</span></label></div>`;
+  if (!d.dirs.length && !d.files.length) h += '<div class="muted">(no ABF files here)</div>';
+  box.innerHTML = h;
+  box.querySelectorAll('a[data-p]').forEach(a => a.onclick = e => { e.preventDefault(); browse(a.dataset.p); });
+  const sa = document.getElementById('selall');
+  if (sa) sa.onchange = () => box.querySelectorAll('input[name=files]').forEach(c => c.checked = sa.checked);
+}
+browse('');
+
+// ---- live job / recording status
+async function refreshJobs() {
+  try {
+    const r = await fetch('/api/jobs?experiment_id={{ exp.id }}');
+    const d = await r.json();
+    let active = false, changedRec = false;
+    for (const j of d.jobs) {
+      const row = document.querySelector(`tr[data-job="${j.id}"]`);
+      if (!row) { if (j.status === 'queued' || j.status === 'running') active = true; continue; }
+      const st = row.querySelector('[data-st]');
+      if (st.textContent !== j.status) { st.textContent = j.status; st.className = 'badge ' + j.status; if (j.status === 'done') changedRec = true; }
+      row.querySelector('[data-bar]').style.width = (100 * (j.progress || 0)).toFixed(1) + '%';
+      row.querySelector('[data-msg]').textContent = j.message || '';
+      if (j.status === 'queued' || j.status === 'running') active = true;
+    }
+    for (const rc of d.recordings) {
+      const row = document.querySelector(`tr[data-rec="${rc.id}"] [data-status]`);
+      if (row && row.textContent !== rc.status) { changedRec = true; }
+    }
+    const newJobs = d.jobs.some(j => !document.querySelector(`tr[data-job="${j.id}"]`));
+    if (changedRec || newJobs) {
+      let n = document.getElementById('upd');
+      if (!n) {
+        n = document.createElement('div'); n.id = 'upd'; n.className = 'flash ok';
+        n.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:10;box-shadow:0 2px 8px #0003';
+        n.innerHTML = 'Jobs or recordings changed. <button onclick="location.reload()">Refresh page</button>';
+        document.body.appendChild(n);
+      }
+    }
+    setTimeout(refreshJobs, active ? 3000 : 10000);
+  } catch (e) { setTimeout(refreshJobs, 10000); }
+}
+setTimeout(refreshJobs, 3000);
+</script>
+{% endblock %}

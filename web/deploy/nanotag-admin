@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# nanotag-admin — run NanoTag administration commands as the service user.
+#   sudo nanotag-admin add-user alice
+#   sudo nanotag-admin passwd admin
+#   sudo nanotag-admin list-users
+#   sudo nanotag-admin --help
+set -euo pipefail
+if [[ "$(id -un)" != "nanotag" ]]; then
+  if [[ $EUID -ne 0 ]]; then exec sudo "$0" "$@"; fi
+  exec runuser -u nanotag -- "$0" "$@"
+fi
+set -a
+# shellcheck disable=SC1091
+. /etc/nanotag/nanotag.env
+set +a
+export PYTHONPATH=/opt/nanotag/current
+cd /opt/nanotag/current
+exec /opt/nanotag/venv/bin/python -m nanotag.cli "$@"

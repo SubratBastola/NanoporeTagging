@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Admin{% endblock %}
+{% block content %}
+<h1>Administration</h1>
+<div class="card">
+  <h2 style="margin-top:0">Users</h2>
+  <table class="t">
+    <tr><th>User</th><th>Role</th><th>Status</th><th>Last login</th><th>Reset password</th><th>Role / access</th></tr>
+    {% for u in users %}
+    <tr>
+      <td><b>{{ u.username }}</b><div class="muted small">{{ u.full_name }}</div></td>
+      <td>{{ u.role }}</td>
+      <td>{% if u.active %}<span class="badge done">active</span>{% else %}<span class="badge error">disabled</span>{% endif %}</td>
+      <td class="small">{{ fmt_ts(u.last_login) }}</td>
+      <td><form method="post" action="{{ url_for('admin_user_pw', username=u.username) }}" class="row">
+        <input type="password" name="password" placeholder="new password" required minlength="8"><button>Set</button></form></td>
+      <td class="row">
+        <form method="post" action="{{ url_for('admin_user_role', username=u.username) }}">
+          <input type="hidden" name="role" value="{{ 'user' if u.role == 'admin' else 'admin' }}">
+          <button>{{ 'Make user' if u.role == 'admin' else 'Make admin' }}</button></form>
+        <form method="post" action="{{ url_for('admin_user_active', username=u.username) }}">
+          <input type="hidden" name="active" value="{{ 0 if u.active else 1 }}">
+          <button class="{{ 'danger' if u.active else '' }}">{{ 'Disable' if u.active else 'Enable' }}</button></form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <h3>Add user</h3>
+  <form method="post" action="{{ url_for('admin_user_add') }}" class="row">
+    <input type="text" name="username" placeholder="username" required>
+    <input type="text" name="full_name" placeholder="full name (optional)">
+    <input type="password" name="password" placeholder="password (min 8)" required minlength="8">
+    <select name="role"><option value="user">user</option><option value="admin">admin</option></select>
+    <button class="primary">Add</button>
+  </form>
+  <p class="muted small">Users can view and edit every experiment and annotation set unless you restrict an
+    experiment (on its page) or lock a set. Every edit records who made it.</p>
+</div>
+<div class="card">
+  <h2 style="margin-top:0">Server</h2>
+  <table class="t">
+    <tr><th>Data folder</th><td><code>{{ cfg.DATA }}</code></td></tr>
+    <tr><th>Disk</th><td>{{ fmt_bytes(disk.used) }} used · <b>{{ fmt_bytes(disk.free) }} free</b> of {{ fmt_bytes(disk.total) }}</td></tr>
+    <tr><th>Import folders</th><td>{{ roots|join(', ') }}</td></tr>
+    <tr><th>Parallel jobs</th><td>{{ cfg.WORKERS }}</td></tr>
+    <tr><th>Database</th><td><code>{{ cfg.DB_PATH }}</code> (nightly backups in <code>{{ cfg.BACKUP_DIR }}</code>)</td></tr>
+    <tr><th>Version</th><td>{{ version }}</td></tr>
+  </table>
+</div>
+{% endblock %}

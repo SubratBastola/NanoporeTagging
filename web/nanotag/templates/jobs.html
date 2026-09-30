@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Jobs{% endblock %}
+{% block content %}
+<h1>Jobs</h1>
+<div class="card">
+  <table class="t">
+    <tr><th>#</th><th>Kind</th><th>Experiment</th><th>Status</th><th>Progress</th><th>Message</th><th>By</th><th>Queued</th><th>Finished</th><th></th></tr>
+    {% for j in jobs_list %}
+    <tr><td><a href="{{ url_for('job_page', job_id=j.id) }}">{{ j.id }}</a></td><td>{{ j.kind }}</td>
+      <td>{% if j.experiment_id %}<a href="{{ url_for('experiment', exp_id=j.experiment_id) }}">#{{ j.experiment_id }}</a>{% endif %}</td>
+      <td><span class="badge {{ j.status }}">{{ j.status }}</span></td>
+      <td><span class="bar"><i style="width:{{ (100*(j.progress or 0))|round(1) }}%"></i></span></td>
+      <td class="small">{{ j.message }}</td><td class="small">{{ j.created_by }}</td>
+      <td class="small">{{ fmt_ts(j.created_at) }}</td><td class="small">{{ fmt_ts(j.finished_at) }}</td>
+      <td>{% if j.status == 'queued' %}<form method="post" action="{{ url_for('job_cancel', job_id=j.id) }}"><button>Cancel</button></form>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="10" class="muted">No jobs.</td></tr>{% endfor %}
+  </table>
+</div>
+<script>if ({{ 'true' if jobs_list|selectattr('status','in',['queued','running'])|list else 'false' }}) setTimeout(() => location.reload(), 5000);</script>
+{% endblock %}

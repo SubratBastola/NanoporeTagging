@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Account{% endblock %}
+{% block content %}
+<h1>Account: {{ current_user.username }}</h1>
+<div class="card" style="max-width:460px">
+  <h2 style="margin-top:0">Change password</h2>
+  <form method="post">
+    <p><input type="password" name="current" placeholder="Current password" required style="width:100%"></p>
+    <p><input type="password" name="new1" placeholder="New password (min 8 characters)" required style="width:100%"></p>
+    <p><input type="password" name="new2" placeholder="Repeat new password" required style="width:100%"></p>
+    <button class="primary">Change password</button>
+  </form>
+</div>
+{% endblock %}

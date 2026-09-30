@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Models{% endblock %}
+{% block content %}
+<h1>NN models</h1>
+<div class="card">
+  <table class="t">
+    <tr><th>Name</th><th>SHA-256</th><th>Uploaded</th><th></th></tr>
+    {% for m in models %}
+    <tr><td><b>{{ m.name }}</b> {% if m.is_default %}<span class="badge done">default</span>{% endif %}</td>
+      <td class="small"><code>{{ (m.sha256 or '')[:16] }}…</code></td>
+      <td class="small">{{ m.uploaded_by }} · {{ fmt_ts(m.created_at) }}</td>
+      <td class="row"><a class="btn" href="{{ url_for('model_download', model_id=m.id) }}">Download</a>
+        {% if current_user.is_admin %}
+        {% if not m.is_default %}<form method="post" action="{{ url_for('model_default', model_id=m.id) }}"><button>Make default</button></form>{% endif %}
+        <form method="post" action="{{ url_for('model_delete', model_id=m.id) }}" onsubmit="return confirm('Delete model {{ m.name }}?')"><button class="danger">Delete</button></form>
+        {% endif %}</td></tr>
+    {% else %}<tr><td colspan="4" class="muted">No models registered.</td></tr>{% endfor %}
+  </table>
+</div>
+{% if current_user.is_admin %}
+<div class="card">
+  <h2 style="margin-top:0">Upload a checkpoint (.pt)</h2>
+  <p class="muted small">Must be compatible with the StrongOpt1D architecture in NeuralNetwork.py (a dict with a "model" state_dict).</p>
+  <div class="dropzone" id="mz">Drop a .pt file here or <label style="color:var(--accent);cursor:pointer">choose
+    <input type="file" id="mf" accept=".pt" style="display:none"></label></div>
+  <div class="uplist" id="ml"></div>
+</div>
+<script>setupUploader('mz', 'mf', 'ml', {purpose: 'model'}, () => setTimeout(() => location.reload(), 800));</script>
+{% endif %}
+{% endblock %}

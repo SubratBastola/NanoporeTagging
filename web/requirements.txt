@@ -1,0 +1,19 @@
+# NanoTag server dependencies. Tested together with the versions in requirements.lock
+# (Python 3.12 / Ubuntu 24.04). PyTorch is installed separately by deploy/install.sh.
+numpy>=1.26,<3
+scipy>=1.11,<2
+pandas>=2.1,<4
+matplotlib>=3.8,<4
+scikit-learn>=1.4,<2
+pyabf>=2.3.8,<3
+openpyxl>=3.1,<4
+xlrd>=2.0,<3
+plotly>=5.24,<8
+dash>=2.17,<5
+Flask>=3.0,<4
+Flask-Login>=0.6.3,<0.7
+Werkzeug>=3.0,<4
+zarr>=3.0,<4
+numcodecs>=0.13
+gunicorn>=26
+requests>=2.31

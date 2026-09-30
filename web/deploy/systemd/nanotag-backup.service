@@ -1,0 +1,11 @@
+[Unit]
+Description=NanoTag nightly database backup
+
+[Service]
+Type=oneshot
+User=nanotag
+Group=nanotag
+EnvironmentFile=/etc/nanotag/nanotag.env
+Environment=PYTHONPATH=/opt/nanotag/current
+WorkingDirectory=/opt/nanotag/current
+ExecStart=/opt/nanotag/venv/bin/python -m nanotag.cli backup --keep-days 30
