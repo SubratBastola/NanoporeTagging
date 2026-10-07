@@ -21,7 +21,8 @@
 # Options:
 #   --allow-all          open the web port to every IP (the university firewall blocks outside traffic)
 #   --allow CIDR         only allow this network (repeatable): VPN subnet, lab LAN ...
-#   --port N             web port (default 8050)
+#   --port N             web port (default 3389, the RDP port: over the VPN only SSH and RDP reach the
+#                        lab machine, so NanoTag takes RDP's port and SSH stays for administration)
 #   --data DIR           data folder (default /srv/nanotag)
 #   --import-root DIR    extra server folder users may import ABFs from (repeatable), e.g.
 #                        /home/oguz/NanoporeTagging — read access is granted to the service via ACLs
@@ -37,7 +38,7 @@
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PORT=8050
+PORT=3389
 DATA=/srv/nanotag
 WORKERS=4
 WEB_WORKERS=4
@@ -99,7 +100,16 @@ check_port_free() {
   for pid in $pids; do
     echo "   pid $pid  user $(ps -o user= -p "$pid" 2>/dev/null)  $(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null | cut -c1-120)" >&2
   done
-  echo "   Stop it (e.g.  sudo kill $pids ) and run this again. If you still need it, give it another port." >&2
+  if [[ "$1" == "3389" ]]; then
+    # 3389 is the RDP port: the remote-desktop server restarts if killed, so it has to be disabled
+    echo "   Port 3389 is the Remote Desktop (RDP) port. Turn RDP off from an SSH session (this ends any" >&2
+    echo "   RDP session), then run this again:" >&2
+    echo "      sudo grdctl --system rdp disable ; sudo systemctl disable --now gnome-remote-desktop" >&2
+    echo "   (per-user Desktop Sharing: Settings -> System -> Remote Desktop -> off;" >&2
+    echo "    xrdp: sudo systemctl disable --now xrdp). To keep RDP, use another port (--port N)." >&2
+  else
+    echo "   Stop it (e.g.  sudo kill $pids ) and run this again. If you still need it, give it another port." >&2
+  fi
   exit 1
 }
 check_port_free "$PORT"

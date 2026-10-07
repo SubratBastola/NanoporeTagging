@@ -42,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 set -a; . /etc/nanotag/nanotag.env; set +a
-PORT="${NANOTAG_PORT:-8050}"
+PORT="${NANOTAG_PORT:-3389}"
 PREV="$(readlink -f /opt/nanotag/current)"
 
 health() {   # health [expected-version]: NanoTag (not some other program) answers, with that version
@@ -74,7 +74,16 @@ check_port_free() {
   for pid in $pids; do
     echo "   pid $pid  user $(ps -o user= -p "$pid" 2>/dev/null)  $(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null | cut -c1-120)" >&2
   done
-  echo "   Stop it (e.g.  sudo kill $pids ) and run this again. If you still need it, give it another port." >&2
+  if [[ "$1" == "3389" ]]; then
+    # 3389 is the RDP port: the remote-desktop server restarts if killed, so it has to be disabled
+    echo "   Port 3389 is the Remote Desktop (RDP) port. Turn RDP off from an SSH session (this ends any" >&2
+    echo "   RDP session), then run this again:" >&2
+    echo "      sudo grdctl --system rdp disable ; sudo systemctl disable --now gnome-remote-desktop" >&2
+    echo "   (per-user Desktop Sharing: Settings -> System -> Remote Desktop -> off;" >&2
+    echo "    xrdp: sudo systemctl disable --now xrdp). To keep RDP, use another port (--port N)." >&2
+  else
+    echo "   Stop it (e.g.  sudo kill $pids ) and run this again. If you still need it, give it another port." >&2
+  fi
   exit 1
 }
 
