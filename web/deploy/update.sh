@@ -40,7 +40,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 set -a; . /etc/nanotag/nanotag.env; set +a
-PORT="${NANOTAG_PORT:-8050}"
+PORT="${NANOTAG_PORT:-3389}"
 PREV="$(readlink -f /opt/nanotag/current)"
 
 health() {

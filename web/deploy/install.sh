@@ -21,7 +21,8 @@
 # Options:
 #   --allow-all          open the web port to every IP (the university firewall blocks outside traffic)
 #   --allow CIDR         only allow this network (repeatable): VPN subnet, lab LAN ...
-#   --port N             web port (default 8050)
+#   --port N             web port (default 3389, the RDP port: over the VPN only SSH and RDP reach the
+#                        lab machine, so the RDP server must be turned off first — see the port check)
 #   --data DIR           data folder (default /srv/nanotag)
 #   --import-root DIR    extra server folder users may import ABFs from (repeatable), e.g.
 #                        /home/oguz/NanoporeTagging — read access is granted to the service via ACLs
@@ -36,7 +37,7 @@
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PORT=8050
+PORT=3389
 DATA=/srv/nanotag
 WORKERS=4
 WEB_WORKERS=4
@@ -96,6 +97,24 @@ apt-get install -y -qq python3 python3-venv python3-dev build-essential sqlite3 
 PY=$(command -v python3.12 || command -v python3)
 PYVER=$($PY -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
 info "System Python: $PYVER"
+
+# ---------------------------------------------------------------- port check
+# The default port is 3389 (RDP) because the VPN only passes SSH and RDP to the lab machine.
+# Stop here, before anything is installed, if another program (e.g. the remote-desktop server) holds it.
+PORT_OWNER=$(ss -H -ltnp "( sport = :$PORT )" 2>/dev/null | grep -o 'users:(("[^"]*"' | head -1 | sed 's/users:(("//; s/"$//' || true)
+if [[ -n "$PORT_OWNER" && ! "$PORT_OWNER" =~ ^(gunicorn|python) ]]; then
+  if [[ "$PORT" == "3389" ]]; then
+    die "Port 3389 is in use by '$PORT_OWNER' (the remote-desktop / RDP server).
+NanoTag uses this port so colleagues on the VPN can reach it. Turn RDP off first — from an SSH
+session, because it ends any RDP session:
+    sudo grdctl --system rdp disable              # Ubuntu 24.04 system remote login (GNOME, Wayland)
+    sudo systemctl disable --now gnome-remote-desktop
+  or, if it is per-user Desktop Sharing: Settings -> System -> Remote Desktop -> off
+  (for xrdp instead:  sudo systemctl disable --now xrdp)
+Then rerun this installer. Or keep RDP and pick another port with --port N."
+  fi
+  die "Port $PORT is already in use by '$PORT_OWNER'. Free it or choose another port with --port N."
+fi
 [[ "$PYVER" == "3.11" || "$PYVER" == "3.12" || "$PYVER" == "3.13" ]] || warn "Tested with Python 3.12; found $PYVER."
 
 # ---------------------------------------------------------------- 2. service account
