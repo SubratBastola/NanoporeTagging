@@ -133,6 +133,11 @@ An annotation set is a named collection of events across all recordings of the e
   - Every channel can be shown (checkboxes).
   - Wide views are min/max envelopes that preserve spikes; zoomed-in views show the exact 10 kHz
     samples. Zoom in before placing landmarks precisely.
+  - **✋ Pan** (under Mode) toggles panning: dragging moves the view and the cursor becomes a hand.
+    While it is on, Add Event, Add Window and Delete Events pause (the mode shows Zoom/Inspect);
+    turning Pan off returns to the previous mode, and Add Event keeps the points already clicked.
+    Choosing a mode by hand while panning ends the pause.
+  - The page fits one browser window; each column (tools, plot, event table) scrolls on its own.
   - Edits save immediately.
   - Other people's edits appear within about 10 seconds.
   - If two people edit the same event, the second save is refused with "changed by X".

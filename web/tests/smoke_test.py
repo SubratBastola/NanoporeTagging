@@ -183,7 +183,8 @@ def run_checks(tmp):
     print("tagger load ok:", len(events), "events, window", window)
     render_dep = next(d for d in deps if d["output"].startswith("..graph.figure"))
     ins = {"events": events, "window": window, "nav": 0, "zoom": {}, "click": {"stage": "idle"}, "vis": vis,
-           "mode": "zoom", "sel": None, "opts": [], "authors": None, "budget": 8000}
+           "mode": "zoom", "sel": None, "opts": [], "authors": None, "budget": 8000,
+           "pan": {"on": False, "prev": None, "skip": None}}
     props = {"events": "data", "window": "data", "nav": "data", "zoom": "data", "click": "data", "vis": "value",
              "mode": "value", "sel": "data", "opts": "value", "authors": "value", "budget": "value"}
     rr = dash_call(s, render_dep["output"], [(i["id"], i["property"], ins[i["id"]]) for i in render_dep["inputs"]],
@@ -203,6 +204,8 @@ def run_checks(tmp):
     assert all(n > 100 for n in n_pts), n_pts
     print("render ok: points per trace", n_pts, f"payload {size_kb:.0f} KB |", fig["layout"]["xaxis"]["title"]["text"])
     assert len(tmap["traces"]) == 6
+    assert abs(fig["layout"]["xaxis"]["rangeslider"]["thickness"] - 0.063) < 1e-9
+    assert fig["layout"]["dragmode"] == "zoom"
 
     # add an event by clicking 3 optical + 4 electrical points
     click_dep = next(d for d in deps if d["output"].startswith("..click.data"))
@@ -259,6 +262,46 @@ def run_checks(tmp):
                     [(st["id"], st["property"], stv4[st["id"]]) for st in rel_dep["state"]])
     assert "Removed 1 event" in json.dumps(res["msg"]), res["msg"]
     print("window add + delete ok")
+
+    # ---- Pan toggle: pauses Add Event (mode -> zoom), keeps pending clicks, restores the mode
+    pan_dep = next(d for d in deps if d["inputs"] == [{"id": "pan-btn", "property": "n_clicks"}])
+    mode_dep = next(d for d in deps if d["inputs"] == [{"id": "mode", "property": "value"}])
+    ui_dep = next(d for d in deps if d["output"].startswith("..pan-btn.className"))
+    pend = {"stage": "optical", "optical_times": [t_s], "electrical_times": []}
+    r = dash_call(s, pan_dep["output"], [("pan-btn", "n_clicks", 1)],
+                  [("pan", "data", {"on": False, "prev": None, "skip": None}), ("mode", "value", "add")])
+    pan_on = r["pan"]["data"]
+    assert pan_on == {"on": True, "prev": "add", "skip": "zoom"} and r["mode"]["value"] == "zoom", r
+    mst = {"ctx": ctx, "events": new_events, "window": window, "sel": None, "pan": pan_on}
+    r = dash_call(s, mode_dep["output"], [("mode", "value", "zoom")],
+                  [(st["id"], st["property"], mst[st["id"]]) for st in mode_dep["state"]])
+    assert "click" not in r and r["pan"]["data"]["skip"] is None, r   # pending clicks untouched
+    pan_on = r["pan"]["data"]
+    ins_p = dict(ins, mode="zoom", click=pend, pan=pan_on)
+    rr = dash_call(s, render_dep["output"], [(i["id"], i["property"], ins_p[i["id"]]) for i in render_dep["inputs"]],
+                   [(st["id"], st["property"], {"ctx": ctx, "rev": resp["rev"]["data"]}[st["id"]])
+                    for st in render_dep["state"]])
+    lay = rr["graph"]["figure"]["layout"]
+    assert lay["dragmode"] == "pan", lay["dragmode"]
+    assert any("Pan" in a.get("text", "") and "Add Event paused" in a.get("text", "") for a in lay["annotations"])
+    assert any(t.get("marker", {}).get("color") == "#ea580c" for t in rr["graph"]["figure"]["data"])  # pending O1
+    r = dash_call(s, ui_dep["output"], [("pan", "data", pan_on)], [("pan-badge", "style", {"display": "none"})])
+    assert r["pan-btn"]["className"] == "on" and r["pan-badge"]["style"]["display"] == "block", r
+    r = dash_call(s, pan_dep["output"], [("pan-btn", "n_clicks", 2)], [("pan", "data", pan_on), ("mode", "value", "zoom")])
+    assert r["mode"]["value"] == "add" and r["pan"]["data"] == {"on": False, "prev": None, "skip": "add"}, r
+    r = dash_call(s, mode_dep["output"], [("mode", "value", "add")],
+                  [(st["id"], st["property"], dict(mst, pan=r["pan"]["data"])[st["id"]]) for st in mode_dep["state"]])
+    assert "click" not in r and r["pan"]["data"] == {"on": False, "prev": None, "skip": None}, r
+    # picking a click/drag mode by hand while panning turns Pan off and starts that mode fresh
+    r = dash_call(s, mode_dep["output"], [("mode", "value", "window")],
+                  [(st["id"], st["property"], dict(mst, pan={"on": True, "prev": "add", "skip": None})[st["id"]])
+                   for st in mode_dep["state"]])
+    assert r["pan"]["data"]["on"] is False and r["click"]["data"]["optical_times"] == [], r
+    # Pan from Zoom/Inspect: mode stays, nothing to restore
+    r = dash_call(s, pan_dep["output"], [("pan-btn", "n_clicks", 3)],
+                  [("pan", "data", {"on": False, "prev": None, "skip": None}), ("mode", "value", "zoom")])
+    assert "mode" not in r and r["pan"]["data"] == {"on": True, "prev": None, "skip": None}, r
+    print("pan toggle ok")
 
     # lock the set -> alice cannot edit
     ok(s.post(f"{BASE}/sets/{sid}/lock", data={"locked": "1"}), "lock")

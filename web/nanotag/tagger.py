@@ -7,7 +7,10 @@ same derived values. Differences:
     wide views are min/max envelopes, narrow views are exact 10 kHz samples;
   * every channel of the ABF can be shown (checkboxes); roles default to 2/3/0;
   * edits are saved immediately to the shared database with the author recorded,
-    and other users' changes appear automatically (revision polling).
+    and other users' changes appear automatically (revision polling);
+  * a Pan toggle (hand cursor): while it is on, Add Event / Add Window / Delete are paused
+    (the mode shows Zoom/Inspect and a drag moves the view), and turning it off returns to the
+    previous mode with any pending Add Event clicks kept.
 """
 import math
 from urllib.parse import parse_qs, urlencode
@@ -40,6 +43,41 @@ ELEC_VAL = {"entry_base_t": "entry_base", "entry_peak_t": "entry_peak",
 TABLE_COLS = ["event_id", "event_start (s)", "event_plateau", "event_end (s)", "duration", "OSC", "RefOSC",
               "entry spike", "exit spike", "window_start", "window_end", "notes", "created_by", "updated_by"]
 EDITABLE_COLS = {"notes"}
+# Modes that Pan suspends: they use a click or a drag, which Pan needs for moving the view.
+PAN_SUSPENDS = ("add", "window", "delete")
+PAN_OFF = {"on": False, "prev": None, "skip": None}
+MODE_NAMES = {"zoom": "Zoom/Inspect", "add": "Add Event", "window": "Add Window", "delete": "Delete Events",
+              "edit": "Edit Points"}
+RANGESLIDER_THICKNESS = 0.063   # bottom overview slider: 90 % of the original 0.07
+
+# Page-level CSS for the Tagger. The page fills exactly one browser window (no page scrollbars on a
+# normal desktop); each column scrolls on its own, so the event table's vertical and horizontal
+# scrollbars stay on screen. body.nt-pan is set while Pan is on and turns the plot cursor into a hand.
+TAGGER_INDEX = """<!DOCTYPE html>
+<html>
+<head>
+{%metas%}
+<title>{%title%}</title>
+{%favicon%}
+{%css%}
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body { overflow: auto; }
+  body.nt-pan .js-plotly-plot .plotly .draglayer .nsewdrag { cursor: grab !important; }
+  body.nt-pan .dragcover { cursor: grabbing !important; }
+  #pan-btn.on { background: #1f3a8a; color: #fff; border-color: #1f3a8a; }
+  #pan-btn { font-size: 14px; padding: 4px 12px; }
+</style>
+</head>
+<body>
+{%app_entry%}
+<footer>
+{%config%}
+{%scripts%}
+{%renderer%}
+</footer>
+</body>
+</html>"""
 
 
 def label_texts(short, long=False):
@@ -149,7 +187,7 @@ def _ev_span(e):
 
 # ----------------------------------------------------------------- figure
 def build_figure(ctx, events, window, zoom, click, visible, mode, sel, long_labels, authors_on,
-                 color_by_author, budget):
+                 color_by_author, budget, pan=None):
     order = channel_order(ctx, visible)
     if not order:
         order = [ctx["roles"]["opt"]]
@@ -158,6 +196,9 @@ def build_figure(ctx, events, window, zoom, click, visible, mode, sel, long_labe
     h = (1.0 - gap * (n - 1)) / n
     axis_of = {ch: i + 1 for i, ch in enumerate(order)}
     w0, w1 = window
+    pan = pan or PAN_OFF
+    # pending Add Event clicks stay visible while Pan has paused Add Event
+    show_pending = mode == "add" or (pan.get("on") and pan.get("prev") == "add")
     fig = go.Figure()
     tmap = []
 
@@ -238,7 +279,7 @@ def build_figure(ctx, events, window, zoom, click, visible, mode, sel, long_labe
                                      name=key if color_by_author else "events", hoverinfo="skip"))
 
     # ---- pending clicks (Add mode) ----
-    if click and mode == "add":
+    if click and show_pending:
         ot = click.get("optical_times") or []
         if ot:
             for role, ch, pref, sym in (("opt", opt, "O", "circle-open"), ("optref", optref, "R", "diamond-open")):
@@ -285,7 +326,7 @@ def build_figure(ctx, events, window, zoom, click, visible, mode, sel, long_labe
 
     layout = dict(
         template="plotly_white",
-        dragmode="select" if mode in ("delete", "window") else "zoom",
+        dragmode="pan" if pan.get("on") else ("select" if mode in ("delete", "window") else "zoom"),
         selectdirection="h",
         clickmode="event",
         uirevision=None,
@@ -293,7 +334,7 @@ def build_figure(ctx, events, window, zoom, click, visible, mode, sel, long_labe
         legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0),
         margin=dict(l=70, r=20, t=40, b=30),
         shapes=shapes,
-        xaxis=dict(domain=[0, 1], range=[w0, w1], rangeslider=dict(visible=True, thickness=0.07),
+        xaxis=dict(domain=[0, 1], range=[w0, w1], rangeslider=dict(visible=True, thickness=RANGESLIDER_THICKNESS),
                    title=dict(text=f"Time (s) — window {w0:.3f} to {w1:.3f}  ·  "
                                    + ("exact 10 kHz samples" if info and info["mode"] == "full"
                                       else f"min/max envelope, bin {1000 * (info or {}).get('bin_s', 0):.2f} ms "
@@ -307,7 +348,15 @@ def build_figure(ctx, events, window, zoom, click, visible, mode, sel, long_labe
             domain=[max(0.0, top - h), top], range=y_ranges[ch], fixedrange=False,
             title=dict(text=ch_label(ctx, ch) + role, font=dict(size=11)))
     fig.update_layout(**layout)
-    if mode == "add":
+    if pan.get("on"):
+        prev = pan.get("prev")
+        text = "✋ Pan — drag to move the view" + (
+            f" · {MODE_NAMES.get(prev, prev)} paused" + (f" ({_add_mode_text(click)})" if prev == "add" else "")
+            + " · click Pan again to resume" if prev else "")
+        fig.add_annotation(text=text, x=0.5, xref="paper", y=1.0, yref="paper", yanchor="bottom",
+                           showarrow=False, font=dict(size=12, color="#7c2d12"), bgcolor="#ffedd5",
+                           bordercolor="#fdba74", borderwidth=1, borderpad=4)
+    elif mode == "add":
         fig.add_annotation(text=_add_mode_text(click), x=0.5, xref="paper", y=1.0, yref="paper", yanchor="bottom",
                            showarrow=False, font=dict(size=12, color="#1f3a8a"), bgcolor="#eef2ff",
                            bordercolor="#c7d2fe", borderwidth=1, borderpad=4)
@@ -365,6 +414,7 @@ def _menu(title, options, current, href):
 def init_tagger(server):
     app = Dash(__name__, server=server, url_base_pathname="/tagger/", title="Tagger",
                suppress_callback_exceptions=True, update_title=None)
+    app.index_string = TAGGER_INDEX
 
     btn = {"marginRight": "6px"}
     small = {"fontSize": "12px", "color": "#555"}
@@ -373,6 +423,7 @@ def init_tagger(server):
         dcc.Store(id="ctx"), dcc.Store(id="events", data=[]), dcc.Store(id="rev"),
         dcc.Store(id="window"), dcc.Store(id="nav", data=0), dcc.Store(id="zoom", data={}),
         dcc.Store(id="click", data={"stage": "idle"}), dcc.Store(id="sel"), dcc.Store(id="tmap"),
+        dcc.Store(id="pan", data=dict(PAN_OFF)), dcc.Store(id="pan-cls"),
         dcc.Interval(id="poll", interval=10000),
         dcc.Download(id="download"),
         html.Div([
@@ -380,7 +431,7 @@ def init_tagger(server):
             html.Div(id="rec-menu", style={"marginRight": "10px"}),
             html.Div(id="set-menu"),
             html.Span(id="who", style={"marginLeft": "14px", **small}),
-        ], style={"display": "flex", "alignItems": "center", "padding": "8px 10px",
+        ], style={"display": "flex", "alignItems": "center", "padding": "8px 10px", "flex": "0 0 auto",
                   "borderBottom": "1px solid #e5e7eb"}),
         html.Div([
             html.Div([
@@ -392,6 +443,11 @@ def init_tagger(server):
                     {"label": "Delete Events (drag rectangle)", "value": "delete"},
                     {"label": "Edit Points (select row then drag guides)", "value": "edit"},
                 ]),
+                html.Div([
+                    html.Button("✋ Pan", id="pan-btn", title="Toggle Pan: drag moves the view. Add Event, Add "
+                                "Window and Delete pause while it is on and resume when you turn it off."),
+                    html.Span(id="pan-state", style={"marginLeft": "8px", **small}),
+                ], style={"marginTop": "6px", "display": "flex", "alignItems": "center"}),
                 html.Div("Add: click 3 points on Optical/OpticalRe (start, plateau, end), then 4 on Electrical "
                          "(entry base, entry peak, exit peak, exit base). Window: drag a rectangle. Delete: drag a "
                          "rectangle to remove events in that range. Edit: select a row, then drag the guides. "
@@ -431,29 +487,43 @@ def init_tagger(server):
                 html.Div("Show events by", style={"fontWeight": 700, "marginTop": "8px"}),
                 dcc.Checklist(id="authors", inputStyle={"marginRight": "4px"}, labelStyle={"display": "block"}),
             ], style={"flex": "0 0 260px", "padding": "8px 10px", "borderRight": "1px solid #eee",
-                      "fontSize": "13px", "overflowY": "auto", "maxHeight": "92vh"}),
+                      "fontSize": "13px", "overflowY": "auto", "minHeight": 0}),
             html.Div([
-                html.Div(id="msg", style={"minHeight": "20px", "margin": "4px 8px", "color": "#15803d"}),
-                dcc.Graph(id="graph", style={"height": "84vh"}, config={
-                    "scrollZoom": True, "doubleClick": "reset", "displaylogo": False,
-                    "modeBarButtonsToRemove": ["lasso2d", "zoomIn2d", "zoomOut2d", "autoScale2d", "resetScale2d"],
-                    "edits": {"shapePosition": True}, "responsive": True}),
-            ], style={"flex": "1 1 auto", "minWidth": "600px"}),
+                html.Div(id="msg", style={"minHeight": "20px", "margin": "4px 8px", "color": "#15803d",
+                                          "flex": "0 0 auto"}),
+                # the graph fills whatever height is left in the window (absolute fill of a flex child)
+                html.Div([
+                    dcc.Graph(id="graph", style={"position": "absolute", "top": 0, "right": 0, "bottom": 0, "left": 0}, config={
+                        "scrollZoom": True, "doubleClick": "reset", "displaylogo": False,
+                        "modeBarButtonsToRemove": ["lasso2d", "zoomIn2d", "zoomOut2d", "autoScale2d",
+                                                   "resetScale2d"],
+                        "edits": {"shapePosition": True}, "responsive": True}),
+                    html.Div("✋", id="pan-badge", title="Pan is on",
+                             style={"display": "none", "position": "absolute", "top": "6px", "left": "8px",
+                                    "zIndex": 5, "fontSize": "26px", "lineHeight": 1, "padding": "4px 6px",
+                                    "background": "#ffedd5", "border": "1px solid #fdba74", "borderRadius": "8px",
+                                    "pointerEvents": "none"}),
+                ], style={"position": "relative", "flex": "1 1 auto", "minHeight": 0}),
+            ], style={"flex": "1 1 auto", "minWidth": "420px", "display": "flex", "flexDirection": "column"}),
             html.Div([
                 html.Div("Events in this recording (click a row to navigate)", style={"fontWeight": 600}),
                 dash_table.DataTable(
                     id="table", columns=[{"name": c, "id": c, "editable": c in EDITABLE_COLS} for c in TABLE_COLS],
                     data=[], row_selectable="single", page_size=25, sort_action="native", filter_action="native",
-                    style_table={"height": "68vh", "overflowY": "auto", "overflowX": "auto"},
+                    # sized to the window so both table scrollbars are always on screen
+                    style_table={"height": "calc(100vh - 175px)", "overflowY": "auto", "overflowX": "auto",
+                                 "width": "100%"},
                     style_cell={"fontSize": 12, "padding": "4px", "textAlign": "left", "minWidth": "60px",
                                 "maxWidth": "180px", "whiteSpace": "nowrap", "overflow": "hidden",
                                 "textOverflow": "ellipsis"},
                     style_header={"fontWeight": 600}),
                 html.Div([html.Button("Delete selected", id="del-row", style=btn),
                           html.Button("Export this recording (CSV)", id="export")], style={"marginTop": "6px"}),
-            ], id="side", style={"flex": "0 0 520px", "padding": "8px", "borderLeft": "1px solid #eee"}),
-        ], style={"display": "flex", "alignItems": "stretch"}),
-    ], style={"fontFamily": "-apple-system, Segoe UI, Helvetica, Arial, sans-serif"})
+            ], id="side", style={"flex": "0 1 520px", "minWidth": "280px", "padding": "8px",
+                                 "borderLeft": "1px solid #eee", "overflowX": "hidden", "overflowY": "auto"}),
+        ], style={"display": "flex", "alignItems": "stretch", "flex": "1 1 auto", "minHeight": 0}),
+    ], style={"fontFamily": "-apple-system, Segoe UI, Helvetica, Arial, sans-serif", "height": "100vh",
+              "minWidth": "980px", "display": "flex", "flexDirection": "column", "overflow": "hidden"})
 
     # ------------------------------------------------------------ load / navigation
     @app.callback(
@@ -517,14 +587,14 @@ def init_tagger(server):
     @app.callback(Output("graph", "figure"), Output("tmap", "data"),
                   Input("events", "data"), Input("window", "data"), Input("nav", "data"), Input("zoom", "data"),
                   Input("click", "data"), Input("vis", "value"), Input("mode", "value"), Input("sel", "data"),
-                  Input("opts", "value"), Input("authors", "value"), Input("budget", "value"),
+                  Input("opts", "value"), Input("authors", "value"), Input("budget", "value"), Input("pan", "data"),
                   State("ctx", "data"), State("rev", "data"))
-    def render(events, window, nav, zoom, click, vis, mode, sel, opts, authors_on, budget, ctx, rev):
+    def render(events, window, nav, zoom, click, vis, mode, sel, opts, authors_on, budget, pan, ctx, rev):
         if not ctx or not window:
             return go.Figure(), None
         opts = opts or []
         fig, tmap = build_figure(ctx, events or [], window, zoom or {}, click, vis or [], mode, sel,
-                                 "long" in opts, authors_on, "author" in opts, int(budget or 8000))
+                                 "long" in opts, authors_on, "author" in opts, int(budget or 8000), pan)
         fig.update_layout(uirevision=f"{ctx['rec_id']}-{nav}")
         return fig, tmap
 
@@ -704,15 +774,60 @@ def init_tagger(server):
                 "Electrical point 4/4 recorded  Event saved.")
 
     @app.callback(Output("click", "data", allow_duplicate=True), Output("sel", "data", allow_duplicate=True),
+                  Output("pan", "data", allow_duplicate=True),
                   Input("mode", "value"), State("ctx", "data"), State("events", "data"), State("window", "data"),
-                  State("sel", "data"), prevent_initial_call=True)
-    def mode_change(mode, ctx, events, window, sel):
+                  State("sel", "data"), State("pan", "data"), prevent_initial_call=True)
+    def mode_change(mode, ctx, events, window, sel, pan):
+        pan = dict(pan or PAN_OFF)
+        if pan.get("skip") == mode:
+            # this change came from the Pan button (pause or resume): keep pending Add Event clicks
+            pan["skip"] = None
+            return no_update, no_update, pan
+        if pan.get("on"):
+            # the user picked a mode by hand while panning: that choice wins, nothing to restore later;
+            # a click/drag mode needs the mouse, so Pan turns off for it
+            pan = dict(PAN_OFF) if mode in PAN_SUSPENDS else {"on": True, "prev": None, "skip": None}
+        else:
+            pan = no_update
         click = {"stage": "optical" if mode == "add" else "idle", "optical_times": [], "electrical_times": []}
         if mode == "edit" and not sel and events and window:
             c = (window[0] + window[1]) / 2.0
             best = min(events, key=lambda e: abs(np.mean(_ev_span(e)) - c) if _ev_span(e)[0] is not None else 1e18)
             sel = best["id"]
-        return click, sel
+        return click, sel, pan
+
+    # ------------------------------------------------------------ Pan toggle
+    @app.callback(Output("pan", "data", allow_duplicate=True), Output("mode", "value", allow_duplicate=True),
+                  Input("pan-btn", "n_clicks"), State("pan", "data"), State("mode", "value"),
+                  prevent_initial_call=True)
+    def toggle_pan(n, pan, mode):
+        pan = pan or PAN_OFF
+        if not pan.get("on"):
+            # Pan on: Add Event / Add Window / Delete switch to Zoom/Inspect until Pan is turned off
+            prev = mode if mode in PAN_SUSPENDS else None
+            return {"on": True, "prev": prev, "skip": "zoom" if prev else None}, ("zoom" if prev else no_update)
+        # Pan off: go back to the mode that was active before Pan
+        prev = pan.get("prev")
+        return {"on": False, "prev": None, "skip": prev}, (prev if prev else no_update)
+
+    @app.callback(Output("pan-btn", "className"), Output("pan-badge", "style"), Output("pan-state", "children"),
+                  Input("pan", "data"), State("pan-badge", "style"))
+    def pan_ui(pan, badge):
+        pan = pan or PAN_OFF
+        badge = dict(badge or {})
+        badge["display"] = "block" if pan.get("on") else "none"
+        if not pan.get("on"):
+            return "", badge, ""
+        prev = pan.get("prev")
+        return "on", badge, (f"{MODE_NAMES.get(prev, prev)} paused" if prev else "drag to move")
+
+    # body class for the hand cursor (Plotly's drag cover lives outside the app div)
+    app.clientside_callback(
+        """function(pan) {
+            document.body.classList.toggle('nt-pan', !!(pan && pan.on));
+            return !!(pan && pan.on);
+        }""",
+        Output("pan-cls", "data"), Input("pan", "data"))
 
     @app.callback(Output("click", "data", allow_duplicate=True), Output("msg", "children", allow_duplicate=True),
                   Input("undo", "n_clicks"), Input("discard", "n_clicks"), State("click", "data"),
