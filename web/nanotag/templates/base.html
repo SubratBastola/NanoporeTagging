@@ -3,33 +3,57 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}NanoTag{% endblock %} · NanoTag</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-  <script src="{{ url_for('static', filename='upload.js') }}"></script>
+  <meta http-equiv="Cache-Control" content="no-store">
+  <title>{% block title %}NanoTag{% endblock %} · NanoTag v{{ version }}</title>
+  <link rel="stylesheet" href="{{ asset('style.css') }}">
+  <script src="{{ asset('upload.js') }}"></script>
 </head>
 <body>
 {% if current_user.is_authenticated %}
-<header class="top">
-  <a class="brand" href="/">NanoTag</a>
-  <a href="{{ url_for('experiments') }}">Experiments</a>
-  <a href="{{ url_for('jobs_page') }}">Jobs</a>
-  <a href="{{ url_for('models_page') }}">Models</a>
-  {% if current_user.is_admin %}<a href="{{ url_for('admin') }}">Admin</a>{% endif %}
-  <span class="sp"></span>
-  <a href="{{ url_for('account') }}">{{ current_user.username }}{% if current_user.is_admin %} (admin){% endif %}</a>
-  <a href="{{ url_for('logout') }}">Log out</a>
-</header>
+{% set p = request.path %}
+<div class="shell">
+  <aside class="side">
+    <a class="brand" href="{{ url_for('experiments') }}">NanoTag <span class="ver">v{{ version }}</span></a>
+    <div class="sideuser">👤 {{ current_user.username }}{% if current_user.is_admin %} · admin{% endif %}</div>
+    <nav class="sidenav">
+      <a href="{{ url_for('experiments') }}" class="{{ 'on' if p.startswith('/experiments') or p == '/' }}">🧪 Experiments</a>
+      <a href="{{ url_for('import_page') }}" class="{{ 'on' if p.startswith('/import') }}">📂 Import folder</a>
+      <a href="{{ url_for('files_page') }}" class="{{ 'on' if p.startswith('/files') }}">📁 Files</a>
+      <a href="{{ url_for('jobs_page') }}" class="{{ 'on' if p.startswith('/jobs') }}">⏱ Jobs</a>
+      <a href="{{ url_for('models_page') }}" class="{{ 'on' if p.startswith('/models') }}">🧠 Models</a>
+      {% if current_user.is_admin %}<a href="{{ url_for('admin') }}" class="{{ 'on' if p.startswith('/admin') }}">⚙ Admin · users</a>{% endif %}
+      <a href="{{ url_for('help_page') }}" class="{{ 'on' if p.startswith('/help') }}">❓ Help</a>
+      <a href="{{ url_for('account') }}" class="{{ 'on' if p.startswith('/account') }}">🔑 Change password</a>
+      <a href="{{ url_for('logout') }}">🚪 Log out</a>
+    </nav>
+    {% block sidenav %}{% endblock %}
+    <div class="sidever">NanoTag {{ version }}</div>
+  </aside>
+  <main class="content">
+{% else %}
+  <main class="content" style="max-width:520px;margin:0 auto">
 {% endif %}
-<main>
   {% if default_admin_pw %}
-  <div class="warnbox">The <b>admin</b> account still uses the default password. Change it under
-    <a href="{{ url_for('account') }}">your account</a> (while logged in as admin).</div>
+  <div class="warnbox">The <b>admin</b> account still uses the default password.
+    <a href="{{ url_for('account') }}">Change it now</a>.</div>
   {% endif %}
   {% with msgs = get_flashed_messages(with_categories=true) %}
     {% for cat, m in msgs %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}
   {% endwith %}
   {% block content %}{% endblock %}
-  <div class="muted small" style="margin-top:40px">NanoTag {{ version }}</div>
-</main>
+  </main>
+{% if current_user.is_authenticated %}</div>{% endif %}
+<script>
+// Every form remembers the page (and tab) it was submitted from, so you land back on the same tab.
+document.addEventListener('submit', e => {
+  const f = e.target;
+  if (f.method.toLowerCase() !== 'post' || f.querySelector('input[name=next]')) return;
+  const i = document.createElement('input');
+  i.type = 'hidden'; i.name = 'next'; i.value = location.pathname + location.search + location.hash;
+  f.appendChild(i);
+}, true);
+// Never show a page restored from the browser's back/forward cache.
+window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); });
+</script>
 </body>
 </html>

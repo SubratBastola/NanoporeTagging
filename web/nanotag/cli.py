@@ -9,6 +9,9 @@
     nanotag-admin list-users
     nanotag-admin register-model PATH [--name N] [--default]
     nanotag-admin backup [--keep-days 14]
+    nanotag-admin import-folder DIR [--mode inplace|copy|link|move] [--all] [--recursive] [--set-name N]
+                                [--user NAME] [--dry-run]
+                                                    import every ABF + its _event.csv (like the web page)
     nanotag-admin check                             self-test used by install/update scripts
 """
 import argparse
@@ -123,6 +126,38 @@ def cmd_backup(args):
             print(f"Pruned {f.name}")
 
 
+def cmd_import_folder(args):
+    from . import folder_import
+    migrate()
+    plan = folder_import.scan(Path(args.dir).resolve(), recursive=args.recursive, set_name=args.set_name)
+    items = []
+    for g in plan["groups"]:
+        print(f"\n{g['experiment']}  ({'existing' if g['exists'] else 'new'} experiment)")
+        for it in g["items"]:
+            take = it["selected"] or (args.all and not (it["existing"] and it["existing"]["status"] != "missing"))
+            e = it["events"]
+            ev = (f"{e['name']} ({e['rows']} rows)" if e and not e["error"] else
+                  f"{e['name']} UNREADABLE: {e['error']}" if e else "-")
+            x = it["existing"]
+            st = ("new" if not x else f"in NanoTag, {x['n_events']} events" + (" (DIFFERS)" if x.get("differs") else "")
+                  if x["has_events"] else
+                  "in NanoTag, EVENTS MISSING" if e else "in NanoTag")
+            print(f"  [{'x' if take else ' '}] {it['name']:<50s} {it['condition'] or '-':<9s} {st:<28s} {ev}")
+            if take:
+                items.append({"abf": it["abf"], "events": it["events"]["path"] if it["events"] and not
+                              it["events"]["error"] else None, "experiment": g["experiment"]})
+    if plan["unused_tables"]:
+        print("\nNot used:")
+        for t in plan["unused_tables"]:
+            print(f"  {t['name']}: {t['why']}")
+    print(f"\n{len(items)} of {plan['n_abf']} ABF file(s) selected.")
+    if args.dry_run or not items:
+        return
+    for exp_id, jid, n in folder_import.enqueue_import(items, args.mode, args.set_name, args.user,
+                                                       folder=str(Path(args.dir).resolve())):
+        print(f"Queued import job #{jid}: {n} recording(s) -> experiment #{exp_id}")
+
+
 def cmd_check(args):
     c = cfg()
     ok = True
@@ -178,6 +213,12 @@ def main(argv=None):
     p.add_argument("--default", action="store_true"); p.set_defaults(fn=cmd_register_model)
     p = sp.add_parser("backup"); p.add_argument("--keep-days", type=int, default=14); p.set_defaults(fn=cmd_backup)
     sp.add_parser("check").set_defaults(fn=cmd_check)
+    p = sp.add_parser("import-folder"); p.add_argument("dir")
+    p.add_argument("--mode", choices=["inplace", "copy", "link", "move"], default="inplace")
+    p.add_argument("--all", action="store_true", help="also ABFs without an event file (e.g. baseline)")
+    p.add_argument("--recursive", action="store_true"); p.add_argument("--set-name", default="Event CSVs")
+    p.add_argument("--user", default="admin"); p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(fn=cmd_import_folder)
     args = ap.parse_args(argv)
     try:
         args.fn(args)

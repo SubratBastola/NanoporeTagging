@@ -148,3 +148,26 @@ def visible_experiments(user):
                                 OR EXISTS (SELECT 1 FROM experiment_access a
                                            WHERE a.experiment_id=e.id AND a.username=?)
                              ORDER BY e.created_at DESC""", (user.username,))
+
+
+def can_delete_experiment(user, exp):
+    """Admins, and the user who created the experiment."""
+    return bool(exp) and (user.is_admin or (exp.get("created_by") or "").lower() == user.username.lower())
+
+
+def can_delete_set(user, aset, exp=None):
+    """Admins; otherwise the set's creator (or the experiment's creator) while the set is not locked."""
+    if aset is None:
+        return False
+    if user.is_admin:
+        return True
+    if aset.get("locked"):
+        return False
+    me = user.username.lower()
+    return (aset.get("created_by") or "").lower() == me or bool(exp and (exp.get("created_by") or "").lower() == me)
+
+
+def can_delete_run(user, run, exp=None):
+    me = user.username.lower()
+    return user.is_admin or (run.get("created_by") or "").lower() == me or \
+        bool(exp and (exp.get("created_by") or "").lower() == me)

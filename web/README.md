@@ -6,7 +6,7 @@ the same annotation sets, and every edit records who made it. The NN and cluster
 background jobs, and clustering produces the same outputs and HTML report as `clustering.py`.
 
 ```
- browser (VPN) ──HTTP :3389──▶ nanotag-web (gunicorn: Flask pages + Dash Tagger)
+ browser (VPN) ──HTTP :8050──▶ nanotag-web (gunicorn: Flask pages + Dash Tagger)
                                    │  reads only the visible time range
                                    ▼
                       /srv/nanotag/zarr   Tagger-filtered 10 kHz signal + min/max zoom levels (~2 % of ABF size)
@@ -24,36 +24,18 @@ background jobs, and clustering produces the same outputs and HTML report as `cl
 Tested on Ubuntu 24.04 (the ANIServer kernel 6.8 is 24.04). The server needs internet access during
 install for apt and pip.
 
-**Network model.** The web port is **3389** by default and is open to **all IP addresses**. Over the
-VPN only SSH (22) and RDP (3389) reach the lab machine and IT will not open other ports, so NanoTag
-takes over the RDP port and SSH stays for administration. That is safe here because the university
-firewall already blocks outside traffic, so only people on campus or on the VPN can reach the server,
-and everyone still has to log in. Nothing needs to be opened on the university firewall.
-
-**Turn RDP off first.** The installer stops (before installing anything) if another program holds
-port 3389, and prints the commands. On ANIServer the RDP server is GNOME's remote desktop
-(Wayland), so, from an **SSH** session (this ends any RDP session):
-
-```bash
-sudo grdctl --system rdp disable
-sudo systemctl disable --now gnome-remote-desktop
-```
-
-If remote desktop was turned on as per-user Desktop Sharing instead, switch it off under
-Settings → System → Remote Desktop. To keep RDP, install on another port with `--port N`.
-
-**Moving an existing 8050 install to 3389:** turn RDP off as above, then rerun
-`sudo ./deploy/install.sh --allow-all` from the release folder. It is idempotent: it keeps the
-database, users and secret key, rewrites `NANOTAG_PORT` in `/etc/nanotag/nanotag.env` and replaces
-the old ufw rule. (`update.sh` alone keeps whatever port the env file already has.)
+**Network model.** The web port (8050) is open to **all IP addresses**. That is safe here because
+the university firewall already blocks outside traffic, so only people on campus or on the VPN can
+reach the server, and everyone still has to log in. Nothing needs to be opened on the university
+firewall.
 
 ```bash
 # on your laptop
-scp nanotag-0.1.0.tar.gz oguz@ANIServer:~
+scp nanotag-0.1.9.tar.gz oguz@ANIServer:~
 
 # on ANIServer
-tar xzf nanotag-0.1.0.tar.gz
-cd nanotag-0.1.0
+tar xzf nanotag-0.1.9.tar.gz
+cd nanotag-0.1.9
 sudo ./deploy/install.sh --allow-all --import-root /home/oguz/NanoporeTagging
 ```
 
@@ -71,21 +53,21 @@ The script is idempotent, so running it again is safe. It:
 - creates the database and the **admin / admin2025!!** account;
 - registers `best_opt_strict.pt` as the default model;
 - installs the `nanotag-web`, `nanotag-worker` and nightly backup systemd services;
-- opens port 3389 in ufw to all addresses (`--allow-all`) or only to the `--allow` networks;
+- opens port 8050 in ufw to all addresses (`--allow-all`) or only to the `--allow` networks;
 - runs a health check.
 
 Firewall behaviour:
 
-- If `ufw` is already active, the port-3389 rule is added and nothing else changes.
+- If `ufw` is already active, the port-8050 rule is added and nothing else changes.
 - If `ufw` is inactive (the Ubuntu default), the port is already reachable. The rule is saved for
   later, and the script does not turn ufw on unless you add `--enable-ufw` (SSH is always allowed
   first). Use `--no-firewall` to leave the firewall untouched.
 
 Then:
 
-1. Open `http://<ANIServer-IP>:3389` from any computer on campus or on the VPN.
-2. Log in as **admin / admin2025!!**, then change the password under the user name at the top right
-   (a banner reminds you until you do).
+1. Open `http://<ANIServer-IP>:8050` from any computer on campus or on the VPN.
+2. Log in as **admin / admin2025!!**, then change the password with **🔑 Change password** in the
+   upper-left menu (a banner reminds you until you do).
 3. Add people on the **Admin** page, or with `sudo nanotag-admin add-user alice`.
 4. Optionally, run the acceptance test. It writes two synthetic 6-channel ABFs, runs ingest → Tagger →
    NN → clustering → exports, then cleans up (about 30 seconds):
@@ -102,7 +84,93 @@ or nginx in front with a certificate for HTTPS.
 
 ## 2. Everyday use
 
-**Experiments → New experiment**, then open it. The page walks through four steps.
+Everything starts from the **menu in the upper-left corner** of every page, including the Tagger:
+🧪 Experiments · 📂 Import folder · 📁 Files · ⏱ Jobs · 🧠 Models · ⚙ Admin · users (admins only) · ❓ Help ·
+🔑 Change password · 🚪 Log out. Below it is a list of **tools for the page you are on**. On an experiment
+page, for example: Add ABF files, Import event CSV, Open Tagger, Run neural network, Run clustering,
+Export, Jobs, Settings.
+
+- **Experiments (home):** drop ABF files straight onto the page. The experiment is **worked out from the
+  file name** and created if needed (see below). There are also one-click buttons on each experiment row.
+- **Experiment pages** have tabs:
+  **Recordings · Annotations · Neural network · Clustering · Export · Jobs · Settings & access**.
+- **📁 Files** is a browser for the server folders NanoTag can read. From it you can:
+  - see which experiment each ABF is already in;
+  - upload files and create folders in the incoming folder;
+  - download files;
+  - import ABFs or event CSV/XLSX files, either into a chosen experiment or **automatically**.
+
+**📂 Import a folder (the fast way in).** Type or browse to a folder, e.g.
+`/home/oguz/NanoporeTagging/SiO2_Tagging`, and press **Scan**. NanoTag shows a plan before changing
+anything:
+
+- every `.abf` is paired with its event file `<name>_event.csv` (also `_events.csv`, `.csv`, `.xlsx`);
+- recordings are grouped into experiments by file name, so the DC, AC and AOM runs of one sample go
+  into **one experiment**; each recording keeps its **condition** (DC / AC / AOM / AC-AOM / baseline);
+- ABFs with an event file are ticked; ABFs without one (the `baseline` runs) are listed but not ticked.
+  Buttons tick or untick a whole condition. The experiment name can be edited;
+- ABFs are **used in place** by default: nothing is copied, and NanoTag never deletes files in your
+  folders. (Copy, hard-link and move are also offered.)
+- all event files go into one annotation set, **Event CSVs**, in that experiment.
+
+Event files are matched forgivingly: case, doubled or non-breaking spaces, `_event`/`_events` and
+Windows (Excel) encodings don't matter, and a CSV with any name is used if its `file_name` column names
+exactly one ABF in the folder. Files that are not used are listed with the reason (e.g. a duplicate).
+One unreadable file never stops the others; failures are listed in the job's log.
+
+Scanning again later shows, per file, how many events NanoTag holds. **events missing** files are
+ticked automatically; if the count differs from the file's rows, tick **replace events that differ
+from the file** to re-read them (the old events stay in the edit history). Re-importing never
+duplicates recordings or events, so you can add new runs to the same folder and import again. The same works from a terminal:
+`sudo nanotag-admin import-folder /home/oguz/NanoporeTagging/SiO2_Tagging` (add `--dry-run` to only
+show the plan, `--all` to include files without events).
+
+NanoTag can only read folders an admin has allowed. To allow your data folder (once):
+
+```bash
+sudo /opt/nanotag/current/deploy/add-import-root.sh /home/oguz/NanoporeTagging
+```
+
+This gives the `nanotag` service read-only access to that folder and its sub-folders (the rest of
+your home directory stays private) and restarts NanoTag. `--list` shows the allowed folders.
+
+**Deleting.**
+- **Experiments:** on Experiments, tick one or more and press **🗑 Delete selected…**, or use 🗑 on a
+  row or "Delete experiment…" in an experiment's sidebar. A confirmation page shows exactly what goes
+  (recordings, sets, events, clustering runs, ABF copies). NanoTag's own ABF copies are deleted too
+  unless you untick that; files used in place are never deleted.
+- **Analyses:** in an experiment, tick annotation sets (NN results are sets), clustering runs or
+  recordings and press **🗑 Delete ticked …**, or use 🗑 on a row. **🧹 Clear finished jobs** tidies the
+  job lists.
+- Admins can delete anything. Other users can delete experiments they created and sets or runs they
+  created (or anything in an experiment they created); locked sets only by admins.
+
+**Automatic experiments.** The experiment name is the file name without its extension, without the
+run number after the date, and without the trailing acquisition word (DC, AC, AC-AOM, AOM, baseline),
+which is kept as the recording's condition. All 12–16
+files of one day and sample therefore land in the same experiment:
+
+```
+2026_09_14_0001 B3S8-15 100 aM SiO2 DC.abf  ->  experiment "2026_09_14 B3S8-15 100 aM SiO2"
+2026_09_14_0012 B3S8-15 100 aM SiO2 AC.abf  ->  experiment "2026_09_14 B3S8-15 100 aM SiO2"
+```
+
+The import screens show the guessed experiment before you confirm. Event CSVs imported automatically
+send each row to the experiment that holds the ABF named in its `file_name` column. To change the
+rule, set these in `/etc/nanotag/nanotag.env` and restart:
+
+- `NANOTAG_EXPERIMENT_RUN` — a regex for the run number to drop (group 1 is kept);
+- `NANOTAG_EXPERIMENT_STRIP` — a regex removed from the end of the name (group 1 is the condition);
+- `NANOTAG_EXPERIMENT_PREFIX` — text added in front of the name.
+
+**Sign-in and freshness.**
+- Opening the server always shows the login page if you are not signed in. After signing in you land
+  on the Experiments home, never in the middle of an earlier analysis.
+- Sessions end when the browser closes, after 12 hours, and **whenever the server is updated**.
+- Pages are never cached. Styles and scripts carry the release number, so browsers pick up an update
+  immediately and no hard refresh is needed.
+
+The steps below follow the experiment page's tabs.
 
 ### Step 1: Recordings
 
@@ -133,15 +201,21 @@ An annotation set is a named collection of events across all recordings of the e
   - Every channel can be shown (checkboxes).
   - Wide views are min/max envelopes that preserve spikes; zoomed-in views show the exact 10 kHz
     samples. Zoom in before placing landmarks precisely.
-  - **✋ Pan** (under Mode) toggles panning: dragging moves the view and the cursor becomes a hand.
-    While it is on, Add Event, Add Window and Delete Events pause (the mode shows Zoom/Inspect);
-    turning Pan off returns to the previous mode, and Add Event keeps the points already clicked.
-    Choosing a mode by hand while panning ends the pause.
-  - The page fits one browser window; each column (tools, plot, event table) scrolls on its own.
   - Edits save immediately.
   - Other people's edits appear within about 10 seconds.
   - If two people edit the same event, the second save is refused with "changed by X".
   - "Color markers by author" and the author filter show who tagged what.
+  - The events table shows only columns that have values, so imported window lists show their
+    window start/end, and a **status** column says *window only*, *partial* or *tagged*.
+  - **Show all files of the experiment** (tick box above the graph, off by default) lays every
+    recording end to end, labelled by run and condition, with the table listing every file's events.
+    Everything works there too — add events and windows, delete, drag guides, edit notes; each change
+    is saved to the recording under it (an event's 7 points must be in one file). Unticking returns to
+    the file in the middle of the view.
+  - **Navigation:** ✋ **Pan** (top) drags all channels together in time with Y held; ◀ ▶ step half a
+    window. **Thumbwheels** (IRIX style): the vertical wheel left of the plot zooms Y (pick the channel,
+    or *all*, under it), the horizontal wheel below zooms X. Drag, or scroll over a wheel;
+    double-click resets. **Toggle Side Panel** hides the event table to widen the plot.
 - **Exports** available for each set:
   - legacy CSV/XLSX (identical columns to Tagger_GUI);
   - CSV with author columns;
@@ -161,6 +235,9 @@ a new annotation set that you review in the Tagger. Admins can upload other `.pt
 Pick one or more sets (sets from other experiments can be pooled too) and the same parameters as the
 desktop app: α, Max K, bootstraps, duration limits, minimum cluster %, NA imputation and features.
 This runs clustering.py's engine.
+
+**Conditions.** Tick DC, AC, AOM … to cluster only those recordings; tick "one run per ticked
+condition" to get a separate run (and report) for each.
 
 Outputs:
 
@@ -193,6 +270,8 @@ All users can see and edit everything. An admin can:
 | List users | `sudo nanotag-admin list-users` |
 | Register a model | `sudo nanotag-admin register-model /path/model.pt --default` |
 | Backup now | `sudo nanotag-admin backup` (runs nightly at 02:30; kept 30 days in `/srv/nanotag/backups`) |
+| Allow a data folder | `sudo /opt/nanotag/current/deploy/add-import-root.sh /home/oguz/NanoporeTagging` |
+| Import a folder (terminal) | `sudo nanotag-admin import-folder DIR [--dry-run] [--all] [--mode copy]` |
 | Self-check | `sudo nanotag-admin check` |
 | Logs | `journalctl -u nanotag-web -f` · `journalctl -u nanotag-worker -f` |
 | Restart | `sudo systemctl restart nanotag-web nanotag-worker` |
@@ -216,6 +295,7 @@ The Zarr store can always be rebuilt with **Re-ingest**.
 tar xzf nanotag-0.2.0.tar.gz && cd nanotag-0.2.0
 sudo ./deploy/update.sh                 # or: sudo ./deploy/update.sh ~/nanotag-0.2.0.tar.gz
 sudo ./deploy/update.sh --wait 30       # first wait up to 30 min for running jobs to finish
+sudo ./deploy/update.sh --import-root /home/oguz/NanoporeTagging   # also allow a data folder
 sudo /opt/nanotag/current/deploy/update.sh --rollback   # go back to the previous release
 ```
 
@@ -224,7 +304,9 @@ The updater does the following:
 1. Backs up the database.
 2. Installs the new code as a new release folder and updates the Python packages.
 3. Switches `/opt/nanotag/current` and migrates the database.
-4. Restarts the services and health-checks them, rolling back automatically if that fails.
+4. Restarts the services and checks that NanoTag itself, with the new version, answers on the port,
+   rolling back automatically if not. If another program (for example a `python Tagger_GUI.py` left
+   running) holds the port, it stops before changing anything and names that program.
 5. Keeps the last 5 releases.
 
 **Using your own versions of the scripts.** The server runs *unmodified* copies of `NeuralNetwork.py`

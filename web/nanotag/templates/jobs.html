@@ -3,6 +3,8 @@
 {% block content %}
 <h1>Jobs</h1>
 <div class="card">
+  <form method="post" action="{{ url_for('jobs_clear') }}" style="margin-bottom:6px">
+    <button class="small">🧹 Clear finished jobs{% if not current_user.is_admin %} (mine){% endif %}</button></form>
   <table class="t">
     <tr><th>#</th><th>Kind</th><th>Experiment</th><th>Status</th><th>Progress</th><th>Message</th><th>By</th><th>Queued</th><th>Finished</th><th></th></tr>
     {% for j in jobs_list %}

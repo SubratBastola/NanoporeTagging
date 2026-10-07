@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Delete experiments{% endblock %}
+{% block content %}
+<div class="small muted"><a href="{{ url_for('experiments') }}">Experiments</a> ›</div>
+<h1>🗑 Delete {{ summaries|length }} experiment{{ '' if summaries|length == 1 else 's' }}?</h1>
+
+{% if refused %}
+<div class="flash error">You can’t delete {{ refused|map(attribute='name')|join(', ') }} — only admins and the person who
+  created an experiment can. They are left out.</div>
+{% endif %}
+
+{% if summaries %}
+<form method="post" action="{{ url_for('experiments_delete') }}">
+<div class="card danger">
+  <table class="t">
+    <tr><th>Experiment</th><th>Recordings</th><th>Annotation sets</th><th>Events</th><th>Clustering runs</th>
+      <th>ABF copies in NanoTag</th><th>ABFs used in place</th></tr>
+    {% for x in summaries %}
+    <tr><td><b>{{ x.exp.name }}</b><input type="hidden" name="ids" value="{{ x.exp.id }}">
+        <div class="small muted">created {{ fmt_ts(x.exp.created_at) }} by {{ x.exp.created_by }}</div>
+        {% if x.active_jobs %}<div class="small" style="color:var(--warn)">{{ x.active_jobs }} job(s) queued or running —
+          queued ones are cancelled</div>{% endif %}</td>
+      <td>{{ x.n_recordings }}</td><td>{{ x.n_sets }}</td><td>{{ x.n_events }}</td><td>{{ x.n_runs }}</td>
+      <td>{{ x.owned_abf }}{% if x.owned_bytes %} ({{ fmt_bytes(x.owned_bytes) }}){% endif %}</td>
+      <td>{{ x.inplace_abf }}</td></tr>
+    {% endfor %}
+  </table>
+  <p>This permanently removes the recordings’ display data, every annotation set and its edit history, and all
+    clustering runs and their outputs. Export a <b>bundle</b> first if you may want them back.</p>
+  {% if total_bytes %}
+  <p><label><input type="checkbox" name="delete_abf" value="1" checked>
+    Also delete NanoTag’s copies of the ABF files ({{ fmt_bytes(total_bytes) }}).</label>
+    <span class="small muted">Uncheck to keep them in the ABF store.</span></p>
+  {% endif %}
+  <p class="small muted">ABF files that were imported <b>in place</b> stay where they are — NanoTag never deletes
+    files in your own folders.</p>
+  <div class="row">
+    <button class="danger" style="background:var(--err);color:#fff;border-color:var(--err)">🗑 Delete permanently</button>
+    <a class="btn" href="{{ url_for('experiments') }}">Cancel</a>
+  </div>
+</div>
+</form>
+{% else %}
+<p><a class="btn" href="{{ url_for('experiments') }}">Back to experiments</a></p>
+{% endif %}
+{% endblock %}

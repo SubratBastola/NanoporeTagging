@@ -29,7 +29,7 @@ def recover_interrupted():
     try:
         con.execute("UPDATE jobs SET status='queued', started_at=NULL, "
                     "log=COALESCE(log,'') || '[requeued after worker restart]\n' "
-                    "WHERE status='running' AND kind IN ('ingest','import_files')")
+                    "WHERE status='running' AND kind IN ('ingest','import_files','import_folder')")
         con.execute("UPDATE jobs SET status='error', finished_at=?, message='interrupted by worker restart' "
                     "WHERE status='running'", (now(),))
         con.execute("UPDATE cluster_runs SET status='error' WHERE status='running'")

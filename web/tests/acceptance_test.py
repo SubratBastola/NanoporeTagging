@@ -1,7 +1,7 @@
 """Post-install acceptance test against a RUNNING NanoTag server (production mode, real pyabf path).
 
     sudo -u nanotag /opt/nanotag/venv/bin/python /opt/nanotag/current/tests/acceptance_test.py \
-         --url http://127.0.0.1:3389 --user admin --password '...'
+         --url http://127.0.0.1:8050 --user admin --password '...'
 
 It writes two synthetic 6-channel ABF files (500 kHz layout scaled down to 50 kHz, same channel
 names as the lab rigs) into the import folder, then: creates an experiment, imports them from the
@@ -11,6 +11,7 @@ downloads every export — and finally deletes the test experiment and files (un
 import argparse
 import io
 import os
+import re
 import sys
 import time
 import zipfile
@@ -28,7 +29,7 @@ import synthetic as S  # noqa: E402
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--url", default="http://127.0.0.1:3389")
+    ap.add_argument("--url", default="http://127.0.0.1:8050")
     ap.add_argument("--user", default="admin")
     ap.add_argument("--password", required=True)
     ap.add_argument("--folder", default="/srv/nanotag/incoming")
@@ -52,7 +53,7 @@ def main():
     print(f"wrote {len(files)} test ABFs to {folder}")
     name = f"Acceptance test {stamp}"
     r = T.ok(s.post(B + "/experiments/new", data={"name": name}), "new experiment")
-    exp_id = int(r.url.rstrip("/").split("/")[-1])
+    exp_id = int(re.search(r"/experiments/(\d+)", r.url).group(1))
     T.ok(s.post(f"{B}/experiments/{exp_id}/import-folder", data={"files": [str(f) for f in files], "mode": "copy"}),
          "import folder")
     T.wait_jobs(s, exp_id)

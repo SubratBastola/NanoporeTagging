@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block title %}Files{% endblock %}
+{% block content %}
+<div class="pagehead">
+  <h1>📁 Files on the server</h1>
+</div>
+<p class="muted small">Browse the folders NanoTag can read, upload files into the incoming folder, and import ABFs or
+  event CSV/XLSX files into any experiment. Big ABFs are fastest copied straight onto the server
+  (e.g. <code>rsync -P *.abf you@server:{{ incoming }}/</code>) and imported from here.</p>
+
+<div class="sidebar-layout">
+  <aside>
+    <div class="small muted" style="margin:4px 0 6px">Folders</div>
+    {% for r in roots %}
+      <a class="root" href="#" data-root="{{ r.path }}">{{ '📥' if r.writable else ('🗄' if 'store' in r.label else '📂') }}
+        {{ r.label }}<div class="small" style="opacity:.75">{{ r.path }}</div></a>
+    {% endfor %}
+  </aside>
+
+  <div>
+    <div class="card">
+      <div class="fb-toolbar">
+        <span class="crumbs" id="crumbs"></span>
+        <span class="sp" style="flex:1"></span>
+        <select id="filter">
+          <option value="all">All files</option><option value="abf">ABF only</option>
+          <option value="table">CSV / XLSX only</option></select>
+        <a class="btn primary" id="impfolder" href="/import">📂 Import this whole folder…</a>
+        <button id="mkdir-btn" style="display:none">📂 New folder</button>
+        <label id="up-btn" class="act primary" style="display:none;cursor:pointer"><span class="ic">⬆</span>Upload files here
+          <input type="file" id="up-input" multiple style="display:none"></label>
+      </div>
+      <div class="dropzone" id="up-zone" style="display:none;margin-bottom:8px">Drop files here to upload them into this folder</div>
+      <div class="uplist" id="up-list"></div>
+      <table class="t fb" id="fb">
+        <thead><tr><th style="width:28px"><input type="checkbox" id="selall"></th><th>Name</th><th>Type</th>
+          <th>Size</th><th>Modified</th><th>Used in</th><th></th></tr></thead>
+        <tbody><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h3 style="margin-top:0">🧪 Import selected ABFs into an experiment</h3>
+        <form method="post" action="{{ url_for('files_import_abf') }}" data-kind="abf">
+          <div class="row">
+            <select name="experiment_id"><option value="auto" selected>🔮 Automatic — from each file name</option>
+              {% for e in exps %}<option value="{{ e.id }}">{{ e.name }}</option>{% endfor %}</select>
+            <span class="muted small">or new:</span>
+            <input type="text" name="new_experiment" placeholder="New experiment name">
+          </div>
+          <div class="row" style="margin-top:6px">
+            <label><input type="radio" name="mode" value="copy" checked> copy</label>
+            <label><input type="radio" name="mode" value="link"> hard-link (same disk, instant)</label>
+            <label><input type="radio" name="mode" value="move"> move</label>
+          </div>
+          <p class="small muted" id="guess"></p>
+          <p><button class="primary" data-need="abf">Import <span class="n">0</span> ABF file(s)</button></p>
+        </form>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0">📄 Import selected CSV/XLSX as an annotation set</h3>
+        <form method="post" action="{{ url_for('files_import_events') }}" data-kind="table">
+          <div class="row">
+            <select name="experiment_id"><option value="auto" selected>🔮 Automatic — from the file_name column</option>
+              {% for e in exps %}<option value="{{ e.id }}">{{ e.name }}</option>{% endfor %}</select>
+            <span class="muted small">or new:</span>
+            <input type="text" name="new_experiment" placeholder="New experiment name">
+          </div>
+          <div class="row" style="margin-top:6px">
+            <input type="text" name="new_name" placeholder="Annotation set name (optional)">
+            <select name="formula"><option value="tagger">Tagger formulas</option><option value="nn">NN formulas</option></select>
+          </div>
+          <p class="muted small">Rows are matched to recordings by <code>file_name</code> (automatic mode sends each row to the
+            experiment that holds that ABF); import the ABFs first.</p>
+          <p><button class="primary" data-need="table">Import <span class="n">0</span> file(s)</button></p>
+        </form>
+      </div>
+    </div>
+    {% if current_user.is_admin %}
+    <form method="post" action="{{ url_for('files_delete') }}" id="del-form" data-kind="any"
+          onsubmit="return confirm('Delete the selected files from the incoming folder?')">
+      <button class="danger" data-need="any" id="del-btn" style="display:none">🗑 Delete <span class="n">0</span> selected file(s)</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+let CUR = null, DATA = null;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const fmtT = t => new Date(t * 1000).toLocaleString();
+const KIND = {abf: ['ABF', 'abf'], table: ['CSV/XLSX', 'csv'], zip: ['ZIP', ''], model: ['model', ''], other: ['file', '']};
+
+async function load(path) {
+  const r = await fetch('/api/files?path=' + encodeURIComponent(path));
+  const d = await r.json();
+  const tb = document.querySelector('#fb tbody');
+  if (!r.ok) { tb.innerHTML = `<tr><td colspan="7" style="color:#b91c1c">${esc(d.error || 'error')}</td></tr>`; return; }
+  CUR = d.path; DATA = d;
+  const kind = new URLSearchParams(location.search).get('kind');
+  history.replaceState(null, '', '/files?path=' + encodeURIComponent(d.path) + (kind ? '&kind=' + kind : ''));
+  document.querySelectorAll('aside .root').forEach(a => a.classList.toggle('on', d.root && a.dataset.root === d.root.path));
+  document.getElementById('crumbs').innerHTML = d.crumbs.map((c, i) =>
+    i < d.crumbs.length - 1 ? `<a href="#" data-p="${esc(c.path)}">${esc(c.name)}</a> ›` : `<b>${esc(c.name)}</b>`).join(' ');
+  document.getElementById('impfolder').href = '/import?path=' + encodeURIComponent(d.path);
+  for (const id of ['up-btn', 'up-zone', 'mkdir-btn']) document.getElementById(id).style.display = d.writable ? '' : 'none';
+  const del = document.getElementById('del-btn'); if (del) del.style.display = d.writable ? '' : 'none';
+  render();
+}
+
+function render() {
+  const f = document.getElementById('filter').value;
+  const tb = document.querySelector('#fb tbody');
+  let h = '';
+  for (const x of DATA.dirs) h += `<tr class="dir"><td></td><td>📁 <a href="#" data-p="${esc(x.path)}">${esc(x.name)}</a></td>
+      <td><span class="pill">folder</span></td><td></td><td class="small">${fmtT(x.mtime)}</td><td></td><td></td></tr>`;
+  for (const x of DATA.files) {
+    if (f !== 'all' && x.kind !== f) continue;
+    const [lab, cls] = KIND[x.kind];
+    const used = (x.used_in || []).map(u => `<a class="pill used" href="/experiments/${u.exp_id}#recordings">${esc(u.exp_name)}</a>`).join('');
+    const icon = x.kind === 'abf' ? '〰️' : x.kind === 'table' ? '📄' : '▫️';
+    h += `<tr><td><input type="checkbox" class="sel" data-kind="${x.kind}" value="${esc(x.path)}"></td>
+      <td>${icon} ${esc(x.name)}</td><td><span class="pill ${cls}">${lab}</span></td>
+      <td>${fmtBytes(x.size)}</td><td class="small">${fmtT(x.mtime)}</td><td>${used}</td>
+      <td><a class="btn small" href="/files/download?path=${encodeURIComponent(x.path)}">⬇ Download</a></td></tr>`;
+  }
+  if (!h) h = '<tr><td colspan="7" class="muted">This folder is empty.</td></tr>';
+  tb.innerHTML = h;
+  tb.querySelectorAll('a[data-p]').forEach(a => a.onclick = e => { e.preventDefault(); load(a.dataset.p); });
+  tb.querySelectorAll('.sel').forEach(c => c.onchange = counts);
+  document.getElementById('selall').checked = false;
+  counts();
+}
+
+function selected(kind) {
+  return Array.from(document.querySelectorAll('.sel:checked')).filter(c => kind === 'any' || c.dataset.kind === kind).map(c => c.value);
+}
+let guessTimer = null;
+async function previewGuess() {
+  const box = document.getElementById('guess');
+  const names = selected('abf').map(p => p.split('/').pop());
+  if (!names.length) { box.innerHTML = ''; return; }
+  const d = await (await fetch('/api/guess-experiment?' + names.map(n => 'name=' + encodeURIComponent(n)).join('&'))).json();
+  const by = {};
+  for (const x of d) (by[x.experiment] = by[x.experiment] || {n: 0, exists: x.exists}).n++;
+  box.innerHTML = 'Automatic: ' + Object.entries(by).map(([k, v]) => `<b>${esc(k)}</b> (${v.n} file(s)${v.exists ? '' : ', new'})`).join(' · ');
+}
+function counts() {
+  clearTimeout(guessTimer); guessTimer = setTimeout(previewGuess, 250);
+  document.querySelectorAll('button[data-need]').forEach(b => {
+    const n = selected(b.dataset.need).length;
+    b.querySelector('.n').textContent = n; b.disabled = n === 0;
+  });
+}
+document.getElementById('selall').onchange = e => {
+  document.querySelectorAll('.sel').forEach(c => c.checked = e.target.checked); counts();
+};
+document.getElementById('filter').onchange = render;
+document.getElementById('crumbs').onclick = e => { const a = e.target.closest('a[data-p]'); if (a) { e.preventDefault(); load(a.dataset.p); } };
+document.querySelectorAll('aside .root').forEach(a => a.onclick = e => { e.preventDefault(); load(a.dataset.root); });
+
+// forms: add the selected paths as hidden inputs
+document.querySelectorAll('form[data-kind]').forEach(fm => fm.addEventListener('submit', e => {
+  const paths = selected(fm.dataset.kind);
+  if (fm.dataset.kind !== 'any' && !fm.experiment_id.value && !fm.new_experiment.value.trim()) {
+    e.preventDefault(); alert('Choose an experiment or type a name for a new one.'); return;
+  }
+  fm.querySelectorAll('input[name=paths]').forEach(i => i.remove());
+  for (const p of paths) { const i = document.createElement('input'); i.type = 'hidden'; i.name = 'paths'; i.value = p; fm.appendChild(i); }
+}));
+
+document.getElementById('mkdir-btn').onclick = async () => {
+  const name = prompt('New folder name:'); if (!name) return;
+  const r = await fetch('/api/files/mkdir', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                             body: JSON.stringify({path: CUR, name})});
+  const d = await r.json(); if (!r.ok) alert(d.error); else load(CUR);
+};
+
+// uploads into the current folder (chunked, resumable)
+function uploadHere(files) {
+  const list = document.getElementById('up-list');
+  (async () => {
+    for (const f of files) {
+      const row = document.createElement('div'); row.className = 'u';
+      row.innerHTML = `<b>${esc(f.name)}</b> (${fmtBytes(f.size)}) <span class="bar"><i style="width:0%"></i></span> <span class="st"></span>`;
+      list.appendChild(row);
+      const bar = row.querySelector('i'), st = row.querySelector('.st');
+      try {
+        await nanotagUpload(f, {purpose: 'file', dir: CUR}, (frac, note) => {
+          bar.style.width = (100 * frac).toFixed(1) + '%'; st.textContent = `${(100 * frac).toFixed(1)}% ${note || ''}`; });
+        st.textContent = 'uploaded ✓';
+      } catch (e) { st.textContent = 'FAILED: ' + e.message; st.style.color = '#b91c1c'; }
+    }
+    load(CUR);
+  })();
+}
+document.getElementById('up-input').onchange = e => uploadHere(Array.from(e.target.files));
+const zone = document.getElementById('up-zone');
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('hover'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('hover'));
+zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('hover'); uploadHere(Array.from(e.dataTransfer.files)); });
+
+if (new URLSearchParams(location.search).get('kind') === 'table') document.getElementById('filter').value = 'table';
+load({{ start|tojson }});
+</script>
+{% endblock %}

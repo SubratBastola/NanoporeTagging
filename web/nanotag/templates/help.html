@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Help{% endblock %}
+{% block content %}
+<h1>❓ Where to find things</h1>
+<div class="card">
+  <table class="t">
+    <tr><th style="width:32%">I want to…</th><th>Go to</th></tr>
+    <tr><td><b>Import a folder of ABFs + event CSVs</b></td><td><a href="{{ url_for('import_page') }}">📂 Import folder</a> → type or browse to
+      the folder → Scan → check the plan (files with an <code>_event.csv</code> are ticked; baseline runs are not) → Import.
+      DC / AC / AOM runs of one sample go into one experiment; ABFs already on the server are used in place.</td></tr>
+    <tr><td>Delete an experiment</td><td><a href="{{ url_for('experiments') }}">Experiments</a> → tick it → <b>🗑 Delete selected…</b>
+      (or 🗑 on its row, or its sidebar). You see what will be removed first. Admins and the experiment’s creator can delete.</td></tr>
+    <tr><td>Delete NN results, annotation sets, clustering runs, recordings</td><td>Experiment → Annotations / Clustering /
+      Recordings tab → tick → <b>🗑 Delete ticked …</b> (or 🗑 on a row). Finished jobs: <b>🧹 Clear finished jobs</b>.</td></tr>
+    <tr><td>Cluster DC, AC and AOM separately</td><td>Experiment → 📊 Clustering → tick the conditions → “one run per ticked condition”.</td></tr>
+    <tr><td>Create an experiment</td><td><a href="{{ url_for('experiments') }}#new">Experiments → New experiment</a></td></tr>
+    <tr><td>Add ABF files from my computer</td><td>Open the experiment → <b>➕ Add ABF files</b> (Recordings tab) → drop files / choose files</td></tr>
+    <tr><td>Add ABF files already on the server</td><td><a href="{{ url_for('files_page') }}">📁 Files</a> → tick the ABFs → <b>Import selected ABFs</b>
+      (or the experiment's Recordings tab → “Pick files already on the server”)</td></tr>
+    <tr><td>Copy big ABFs onto the server</td><td><code>rsync -P *.abf you@server:{{ incoming }}/</code>, or <a href="{{ url_for('files_page') }}">📁 Files</a> → <b>Upload files here</b></td></tr>
+    <tr><td>Import an event / window CSV or XLSX</td><td>Experiment → <b>📄 Import event CSV</b> (Annotations tab) — or pick a file that is already on the server in <a href="{{ url_for('files_page') }}">📁 Files</a></td></tr>
+    <tr><td>Tag events</td><td>Experiment → <b>🏷 Open Tagger</b>, or the 🏷 Tagger button next to a recording or an annotation set</td></tr>
+    <tr><td>Choose channels / roles</td><td>In the Tagger (left panel), or the Recordings tab of the experiment (defaults: electrical 0, optical 2, opt-ref 3)</td></tr>
+    <tr><td>Run the neural network</td><td>Experiment → <b>🧠 Run neural network</b> (pick the set with the windows, then Run). The result is a new annotation set.</td></tr>
+    <tr><td>Run clustering / see the report</td><td>Experiment → <b>📊 Run clustering</b> → Results → <b>📈 HTML report</b></td></tr>
+    <tr><td>Download CSV / XLSX / NN <code>__predicted.xlsx</code></td><td>Experiment → <b>⬇ Export</b> tab (also in the Tagger: “Export this recording”)</td></tr>
+    <tr><td>Watch progress of uploads, NN, clustering</td><td><a href="{{ url_for('jobs_page') }}">⏱ Jobs</a>, or the experiment's Jobs tab</td></tr>
+    <tr><td>Add users, reset passwords</td><td>{% if current_user.is_admin %}<a href="{{ url_for('admin') }}">⚙ Admin</a>{% else %}⚙ Admin (admins only){% endif %} · change your own password: <a href="{{ url_for('account') }}">👤 {{ current_user.username }}</a></td></tr>
+    <tr><td>Lock a set / restrict an experiment</td><td>Annotations tab (🔒 Lock) · experiment → ⚙ Settings &amp; access (admins)</td></tr>
+    <tr><td>Upload another NN checkpoint</td><td><a href="{{ url_for('models_page') }}">🧠 Models</a> (admins)</td></tr>
+    <tr><td>Move an experiment to another server</td><td>Experiment → ⬇ Export → Bundle; then Experiments → 📦 Import bundle</td></tr>
+  </table>
+</div>
+<div class="card">
+  <h3 style="margin-top:0">Folders NanoTag can read</h3>
+  <p class="small">{% for r in roots %}<code>{{ r }}</code>{% if not loop.last %}, {% endif %}{% endfor %} (and its own ABF store).
+    Uploads go to <code>{{ incoming }}</code>. An admin can allow another folder (for example your data folder in your
+    home directory) by running this once on the server:</p>
+  <pre class="cmd">sudo /opt/nanotag/current/deploy/add-import-root.sh /home/you/NanoporeTagging</pre>
+</div>
+{% endblock %}

@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block title %}Import a folder{% endblock %}
+{% block content %}
+<h1>📂 Import a folder</h1>
+<p class="muted">Point NanoTag at a folder on the server. Every <b>.abf</b> is paired with its event file
+  (<code>&lt;name&gt;_event.csv</code>), recordings are grouped into experiments by file name
+  (<code>2026_09_14_0001 … SiO2 DC.abf</code> → <b>2026_09_14 … SiO2</b>), and each keeps its condition
+  (<span class="cond c-DC">DC</span> <span class="cond c-AC">AC</span> <span class="cond c-AOM">AOM</span> …).
+  Nothing changes until you press <b>Import</b>.</p>
+
+<div class="card">
+  <div class="row">
+    <input type="text" id="path" class="pathbox" value="{{ start }}" placeholder="/home/you/NanoporeTagging/SiO2_Tagging">
+    <button class="primary" id="scan">🔍 Scan folder</button>
+    <label class="small"><input type="checkbox" id="recursive"> include sub-folders</label>
+  </div>
+  <details style="margin-top:8px" id="pick"><summary class="small">Browse folders…</summary>
+    <div class="small muted" style="margin:6px 0">Allowed folders:
+      {% for r in roots %}<a href="#" class="rootlink" data-p="{{ r.path }}">{{ r.path }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</div>
+    <div class="browser" id="dirs">…</div>
+  </details>
+  <div id="err" style="display:none" class="flash error"></div>
+</div>
+
+<div id="plan"></div>
+
+<div class="impbar" id="bar" style="display:none">
+  <div class="row">
+    <b>ABF files:</b>
+    <label title="Recommended when the files already sit on this server: no copy, instant"><input type="radio" name="mode" value="inplace" checked> use in place (no copy)</label>
+    <label><input type="radio" name="mode" value="copy"> copy into NanoTag</label>
+    <label><input type="radio" name="mode" value="link"> hard-link</label>
+    <label><input type="radio" name="mode" value="move"> move</label>
+  </div>
+  <div class="row" style="margin-top:6px">
+    <b>Events go to set</b> <input type="text" id="setname" value="{{ default_set }}" style="width:180px">
+    <label class="small" id="replace-box" style="display:none" title="Their current events in this set are deleted (kept in the edit history) and re-read from the file">
+      <input type="checkbox" id="replace"> replace events that differ from the file (<span id="ndiff">0</span>)</label>
+    <select id="formula" title="Formula for OSC etc. when the file does not provide them">
+      <option value="tagger">Tagger formulas</option><option value="nn">NN formulas</option></select>
+    <span style="flex:1"></span>
+    <span id="summary" class="small"></span>
+    <button class="primary" id="go">⬇ Import</button>
+  </div>
+</div>
+
+<script>
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+let PLAN = null;
+const CONDS = ['DC', 'AC', 'AOM', 'AC-AOM', 'baseline', 'other'];
+const condPill = c => `<span class="cond c-${esc(c || 'other')}">${esc(c || '—')}</span>`;
+
+async function dirs(path) {
+  const box = document.getElementById('dirs');
+  const r = await fetch('/api/files?path=' + encodeURIComponent(path));
+  const d = await r.json();
+  if (!r.ok) { box.innerHTML = `<span style="color:var(--err)">${esc(d.error)}</span>`; return; }
+  const up = d.crumbs && d.crumbs.length > 1 ? d.crumbs[d.crumbs.length - 2].path : null;
+  const nabf = d.files.filter(f => f.kind === 'abf').length, ncsv = d.files.filter(f => f.kind === 'table').length;
+  let h = `<div class="small"><b>${esc(d.path)}</b> — ${nabf} ABF, ${ncsv} CSV/XLSX
+           <button class="minibtn primary" data-use="${esc(d.path)}">Use this folder</button></div>`;
+  if (up) h += `<div>⬆ <a href="#" data-p="${esc(up)}">..</a></div>`;
+  for (const x of d.dirs) h += `<div>📁 <a href="#" data-p="${esc(x.path)}">${esc(x.name)}</a></div>`;
+  box.innerHTML = h;
+  box.querySelectorAll('a[data-p]').forEach(a => a.onclick = e => { e.preventDefault(); dirs(a.dataset.p); });
+  box.querySelectorAll('[data-use]').forEach(b => b.onclick = () => { document.getElementById('path').value = b.dataset.use; scan(); });
+}
+document.querySelectorAll('.rootlink').forEach(a => a.onclick = e => { e.preventDefault(); dirs(a.dataset.p); });
+document.getElementById('pick').addEventListener('toggle', e => { if (e.target.open) dirs(document.getElementById('path').value); });
+
+async function scan() {
+  const path = document.getElementById('path').value.trim();
+  const err = document.getElementById('err');
+  err.style.display = 'none';
+  document.getElementById('plan').innerHTML = '<div class="card muted">Scanning…</div>';
+  const q = new URLSearchParams({path, recursive: document.getElementById('recursive').checked ? '1' : '',
+                                 set_name: document.getElementById('setname').value});
+  const r = await fetch('/api/import/scan?' + q);
+  const d = await r.json();
+  if (!r.ok) {
+    document.getElementById('plan').innerHTML = '';
+    document.getElementById('bar').style.display = 'none';
+    err.innerHTML = esc(d.error) + (d.hint ? `<pre class="cmd">${esc(d.hint)}</pre>` : '');
+    err.style.display = '';
+    return;
+  }
+  PLAN = d;
+  history.replaceState(null, '', '/import?path=' + encodeURIComponent(d.folder));
+  render();
+}
+
+function render() {
+  const box = document.getElementById('plan');
+  if (!PLAN.groups.length) {
+    box.innerHTML = `<div class="card">No .abf files in <code>${esc(PLAN.folder)}</code>${PLAN.recursive ? ' or its sub-folders' : ' (tick “include sub-folders” to look deeper)'}.</div>`;
+    document.getElementById('bar').style.display = 'none';
+    return;
+  }
+  let h = '';
+  PLAN.groups.forEach((g, gi) => {
+    const conds = CONDS.filter(c => g.conditions[c]);
+    h += `<div class="card impgroup" data-g="${gi}">
+      <h3 style="margin:0 0 6px">🧪 <input type="text" class="expname" data-g="${gi}" value="${esc(g.experiment)}"
+          title="Experiment name (edit to import under another name)" ${g.allowed ? '' : 'disabled'}>
+        ${g.exists ? `<span class="badge ready">existing experiment</span> <a class="small" href="/experiments/${g.experiment_id}#recordings">open</a>`
+                   : '<span class="badge queued">new experiment</span>'}</h3>
+      ${g.allowed ? '' : '<div class="flash error">This experiment is restricted; ask an admin for access.</div>'}
+      <div class="row small">Tick:
+        <button class="minibtn" data-sel="events" data-g="${gi}">files with events</button>
+        <button class="minibtn" data-sel="all" data-g="${gi}">all</button>
+        <button class="minibtn" data-sel="none" data-g="${gi}">none</button>
+        ${conds.map(c => `<button class="minibtn" data-sel="cond" data-c="${c}" data-g="${gi}">${condPill(c)} ×${g.conditions[c]}</button>`).join('')}
+      </div>
+      <table class="t" style="margin-top:6px"><tr><th></th><th>Run</th><th>ABF file</th><th>Condition</th><th>Size</th>
+        <th>Event file</th><th>Status</th></tr>`;
+    g.items.forEach((it, ii) => {
+      const ev = it.events;
+      const evtxt = ev ? (ev.error ? `<span style="color:var(--err)">${esc(ev.name)}: ${esc(ev.error)}</span>`
+                                   : `📄 ${esc(ev.name)} <span class="muted">(${ev.rows} rows${ev.matched_by === 'content'
+                                       ? ', paired through its file_name column' : ''})</span>`)
+                       : '<span class="muted">— no event file</span>';
+      let st = '<span class="badge queued">new</span>';
+      if (it.existing && it.existing.status !== 'missing')
+        st = it.existing.differs
+          ? `<span class="badge locked" title="The set holds a different number of events than this file has rows">imported · ${it.existing.n_events} events ≠ ${ev.rows} rows</span>`
+          : it.existing.has_events
+          ? `<span class="badge ready">imported · ${it.existing.n_events} events</span>`
+          : `<span class="badge ready">imported</span>` + (ev ? ' <span class="badge error">events missing</span>' : '');
+      h += `<tr class="${it.selected ? '' : 'off'}"><td><input type="checkbox" class="pick" data-g="${gi}" data-i="${ii}"
+              ${it.selected ? 'checked' : ''} ${g.allowed ? '' : 'disabled'}></td>
+            <td class="small">${esc(it.run || '')}</td><td>${esc(it.rel)}</td><td>${condPill(it.condition)}</td>
+            <td class="small">${fmtBytes(it.size || 0)}</td><td class="small">${evtxt}</td><td>${st}</td></tr>`;
+    });
+    h += '</table></div>';
+  });
+  if (PLAN.unused_tables.length)
+    h += `<details class="card"><summary class="small">${PLAN.unused_tables.length} CSV/XLSX file(s) not paired with an ABF (not imported)</summary>
+          <table class="t small">${PLAN.unused_tables.map(t => `<tr><td>${esc(t.name)}</td><td class="muted">${esc(t.why || '')}</td></tr>`).join('')}</table></details>`;
+  box.innerHTML = h;
+  box.querySelectorAll('.pick').forEach(cb => cb.onchange = () => {
+    PLAN.groups[cb.dataset.g].items[cb.dataset.i].selected = cb.checked;
+    cb.closest('tr').classList.toggle('off', !cb.checked); summary();
+  });
+  box.querySelectorAll('.expname').forEach(inp => inp.oninput = () => { PLAN.groups[inp.dataset.g].experiment = inp.value; });
+  box.querySelectorAll('[data-sel]').forEach(b => b.onclick = () => {
+    const g = PLAN.groups[b.dataset.g];
+    const ofCond = g.items.filter(it => (it.condition || 'other') === b.dataset.c);
+    const allOn = ofCond.length && ofCond.every(it => it.selected);   // condition buttons toggle that condition
+    g.items.forEach(it => {
+      const hasEv = !!(it.events && !it.events.error && it.events.rows);
+      if (b.dataset.sel === 'all') it.selected = true;
+      else if (b.dataset.sel === 'none') it.selected = false;
+      else if (b.dataset.sel === 'events') it.selected = hasEv;
+      else if ((it.condition || 'other') === b.dataset.c) it.selected = !allOn;
+    });
+    render();
+  });
+  document.getElementById('bar').style.display = '';
+  const nd = PLAN.groups.flatMap(g => g.items).filter(it => it.existing && it.existing.differs).length;
+  document.getElementById('ndiff').textContent = nd;
+  document.getElementById('replace-box').style.display = nd ? '' : 'none';
+  summary();
+}
+document.getElementById('replace').addEventListener('change', e => {
+  PLAN.groups.forEach(g => g.items.forEach(it => { if (it.existing && it.existing.differs) it.selected = e.target.checked; }));
+  const keep = e.target.checked; render(); document.getElementById('replace').checked = keep;
+});
+
+function chosen() {
+  const out = [];
+  PLAN.groups.forEach(g => g.allowed && g.items.forEach(it => {
+    if (it.selected) out.push({abf: it.abf, events: it.events && !it.events.error ? it.events.path : null,
+                               experiment: g.experiment});
+  }));
+  return out;
+}
+
+function summary() {
+  const c = chosen();
+  const exps = new Set(c.map(x => x.experiment));
+  const nev = c.filter(x => x.events).length;
+  const bytes = PLAN.groups.flatMap(g => g.items).filter(it => it.selected).reduce((a, it) => a + (it.size || 0), 0);
+  document.getElementById('summary').innerHTML = `<b>${c.length}</b> ABF file(s) (${fmtBytes(bytes)}), <b>${nev}</b> event file(s) → <b>${exps.size}</b> experiment(s)`;
+  document.getElementById('go').disabled = c.length === 0;
+}
+
+document.getElementById('scan').onclick = scan;
+document.getElementById('path').addEventListener('keydown', e => { if (e.key === 'Enter') scan(); });
+document.getElementById('go').onclick = async () => {
+  const btn = document.getElementById('go');
+  const mode = document.querySelector('input[name=mode]:checked').value;
+  if (mode === 'move' && !confirm('Move the ABF files out of their folder into NanoTag?')) return;
+  btn.disabled = true; btn.textContent = 'Importing…';
+  const r = await fetch('/api/import/run', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({folder: PLAN.folder, mode, set_name: document.getElementById('setname').value,
+                          formula: document.getElementById('formula').value, items: chosen(),
+                          replace: document.getElementById('replace').checked})});
+  const d = await r.json();
+  if (!r.ok) { alert(d.error || 'Import failed'); btn.disabled = false; btn.textContent = '⬇ Import'; return; }
+  location.href = d.redirect;
+};
+if (document.getElementById('path').value) scan();
+</script>
+{% endblock %}

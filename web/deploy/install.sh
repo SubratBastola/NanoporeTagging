@@ -21,11 +21,11 @@
 # Options:
 #   --allow-all          open the web port to every IP (the university firewall blocks outside traffic)
 #   --allow CIDR         only allow this network (repeatable): VPN subnet, lab LAN ...
-#   --port N             web port (default 3389, the RDP port: over the VPN only SSH and RDP reach the
-#                        lab machine, so the RDP server must be turned off first — see the port check)
+#   --port N             web port (default 8050)
 #   --data DIR           data folder (default /srv/nanotag)
 #   --import-root DIR    extra server folder users may import ABFs from (repeatable), e.g.
 #                        /home/oguz/NanoporeTagging — read access is granted to the service via ACLs
+#                        (later:  sudo /opt/nanotag/current/deploy/add-import-root.sh DIR)
 #   --workers N          parallel background jobs (default 4)
 #   --web-workers N      gunicorn processes (default 4)
 #   --scripts-dir DIR    use NeuralNetwork.py / clustering.py from DIR instead of the bundled copies
@@ -37,7 +37,7 @@
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PORT=3389
+PORT=8050
 DATA=/srv/nanotag
 WORKERS=4
 WEB_WORKERS=4
@@ -82,6 +82,28 @@ VERSION="$(cat "$SRC/VERSION" 2>/dev/null || echo dev)"
 INSTALLER_USER="${SUDO_USER:-}"
 info "Installing NanoTag $VERSION from $SRC"
 
+# Is something other than NanoTag's gunicorn holding the web port (e.g. an old `python Tagger_GUI.py`)?
+port_intruders() {
+  ss -ltnpH "sport = :$1" 2>/dev/null | grep -o 'users:(([^)]*))' | grep -oE '\("[^"]+",pid=[0-9]+' \
+    | sed -E 's/\("([^"]+)",pid=([0-9]+)/\2 \1/' | sort -u | while read -r pid name; do
+      [[ "$name" == gunicorn* ]] && continue
+      [[ "$(cat /proc/$pid/comm 2>/dev/null)" == gunicorn* ]] && continue
+      grep -q gunicorn "/proc/$pid/cmdline" 2>/dev/null && continue
+      echo "$pid"
+    done || true
+}
+check_port_free() {
+  local pids; pids="$(port_intruders "$1" || true)"
+  [[ -z "$pids" ]] && return 0
+  echo -e "\e[31mERROR:\e[0m port $1 is used by another program, so NanoTag cannot start on it:" >&2
+  for pid in $pids; do
+    echo "   pid $pid  user $(ps -o user= -p "$pid" 2>/dev/null)  $(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null | cut -c1-120)" >&2
+  done
+  echo "   Stop it (e.g.  sudo kill $pids ) and run this again. If you still need it, give it another port." >&2
+  exit 1
+}
+check_port_free "$PORT"
+
 ask() {  # ask "question" default -> echoes answer
   local q="$1" d="${2:-}" a
   if [[ $YES -eq 1 ]]; then echo "$d"; return; fi
@@ -97,24 +119,6 @@ apt-get install -y -qq python3 python3-venv python3-dev build-essential sqlite3 
 PY=$(command -v python3.12 || command -v python3)
 PYVER=$($PY -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
 info "System Python: $PYVER"
-
-# ---------------------------------------------------------------- port check
-# The default port is 3389 (RDP) because the VPN only passes SSH and RDP to the lab machine.
-# Stop here, before anything is installed, if another program (e.g. the remote-desktop server) holds it.
-PORT_OWNER=$(ss -H -ltnp "( sport = :$PORT )" 2>/dev/null | grep -o 'users:(("[^"]*"' | head -1 | sed 's/users:(("//; s/"$//' || true)
-if [[ -n "$PORT_OWNER" && ! "$PORT_OWNER" =~ ^(gunicorn|python) ]]; then
-  if [[ "$PORT" == "3389" ]]; then
-    die "Port 3389 is in use by '$PORT_OWNER' (the remote-desktop / RDP server).
-NanoTag uses this port so colleagues on the VPN can reach it. Turn RDP off first — from an SSH
-session, because it ends any RDP session:
-    sudo grdctl --system rdp disable              # Ubuntu 24.04 system remote login (GNOME, Wayland)
-    sudo systemctl disable --now gnome-remote-desktop
-  or, if it is per-user Desktop Sharing: Settings -> System -> Remote Desktop -> off
-  (for xrdp instead:  sudo systemctl disable --now xrdp)
-Then rerun this installer. Or keep RDP and pick another port with --port N."
-  fi
-  die "Port $PORT is already in use by '$PORT_OWNER'. Free it or choose another port with --port N."
-fi
 [[ "$PYVER" == "3.11" || "$PYVER" == "3.12" || "$PYVER" == "3.13" ]] || warn "Tested with Python 3.12; found $PYVER."
 
 # ---------------------------------------------------------------- 2. service account
@@ -285,10 +289,11 @@ fi
 # ---------------------------------------------------------------- 10. health check
 info "Waiting for the web service ..."
 for i in $(seq 1 60); do
-  if curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then break; fi
+  if curl -fsS "http://127.0.0.1:$PORT/healthz" 2>/dev/null | grep -q "\"$VERSION\""; then break; fi
   sleep 1
 done
-curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null || { journalctl -u nanotag-web -n 50 --no-pager; die "Web service did not start (see log above)."; }
+curl -fsS "http://127.0.0.1:$PORT/healthz" 2>/dev/null | grep -q "\"$VERSION\"" \
+  || { journalctl -u nanotag-web -n 50 --no-pager; check_port_free "$PORT"; die "Web service did not start (see log above)."; }
 nanotag-admin check || warn "Self-check reported problems (see above)."
 
 IP=$( { ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1; } || true)
@@ -301,7 +306,7 @@ $(echo -e "\e[32m")NanoTag $VERSION is running.$(echo -e "\e[0m")
   First login:          admin / $DEFAULT_ADMIN_PW      <-- change it: top-right user menu > Change password
   Add users:            web: Admin page    or    sudo nanotag-admin add-user <name>
   Reset a password:     sudo nanotag-admin passwd <name>
-  Drop big ABFs here:   $DATA/incoming   then use "Import from a server folder" in the experiment page
+  Import your data:     web: 📂 Import folder   (allow a folder first:  sudo /opt/nanotag/current/deploy/add-import-root.sh DIR)
   Logs:                 journalctl -u nanotag-web -f      journalctl -u nanotag-worker -f
   Config:               $ENVF
   Update later:         extract the new release, then  sudo ./deploy/update.sh

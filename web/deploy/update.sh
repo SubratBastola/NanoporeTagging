@@ -16,6 +16,7 @@
 #                       (if omitted, custom scripts from the previous release are carried over)
 #   --wait MIN          wait up to MIN minutes for running jobs to finish before restarting (default 0)
 #   --keep N            keep the N most recent releases (default 5)
+#   --import-root DIR   also let NanoTag read DIR (repeatable), e.g. /home/oguz/NanoporeTagging
 #   --yes               don't ask questions
 # =============================================================================
 set -euo pipefail
@@ -26,7 +27,7 @@ warn() { echo -e "\e[33mWARNING:\e[0m $*"; }
 [[ $EUID -eq 0 ]] || die "Run with sudo."
 [[ -L /opt/nanotag/current ]] || die "NanoTag is not installed (run deploy/install.sh first)."
 
-SRC=""; SCRIPTS_DIR=""; WAIT=0; KEEP=5; YES=0; ROLLBACK=0
+SRC=""; SCRIPTS_DIR=""; WAIT=0; KEEP=5; YES=0; ROLLBACK=0; IMPORT_ROOTS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --scripts-dir) SCRIPTS_DIR="$(realpath "$2")"; shift 2;;
@@ -34,22 +35,49 @@ while [[ $# -gt 0 ]]; do
     --keep) KEEP="$2"; shift 2;;
     --yes|-y) YES=1; shift;;
     --rollback) ROLLBACK=1; shift;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0;;
+    --import-root) IMPORT_ROOTS+=("$(realpath -m "$2")"); shift 2;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0;;
     *) SRC="$1"; shift;;
   esac
 done
 
 set -a; . /etc/nanotag/nanotag.env; set +a
-PORT="${NANOTAG_PORT:-3389}"
+PORT="${NANOTAG_PORT:-8050}"
 PREV="$(readlink -f /opt/nanotag/current)"
 
-health() {
+health() {   # health [expected-version]: NanoTag (not some other program) answers, with that version
+  local want="${1:-}" got
   for i in $(seq 1 60); do
-    curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 && return 0
+    got=$(curl -fsS "http://127.0.0.1:$PORT/healthz" 2>/dev/null | grep -oE '"version": *"[^"]*"' | cut -d'"' -f4 || true)
+    if [[ -n "$got" && ( -z "$want" || "$got" == "$want" ) ]]; then return 0; fi
     sleep 1
   done
+  [[ -n "$got" ]] && warn "port $PORT answers with NanoTag $got, expected $want" \
+                  || warn "nothing that looks like NanoTag answers on port $PORT"
   return 1
 }
+
+# Is something other than NanoTag's gunicorn holding the web port (e.g. an old `python Tagger_GUI.py`)?
+port_intruders() {
+  ss -ltnpH "sport = :$1" 2>/dev/null | grep -o 'users:(([^)]*))' | grep -oE '\("[^"]+",pid=[0-9]+' \
+    | sed -E 's/\("([^"]+)",pid=([0-9]+)/\2 \1/' | sort -u | while read -r pid name; do
+      [[ "$name" == gunicorn* ]] && continue
+      [[ "$(cat /proc/$pid/comm 2>/dev/null)" == gunicorn* ]] && continue
+      grep -q gunicorn "/proc/$pid/cmdline" 2>/dev/null && continue
+      echo "$pid"
+    done || true
+}
+check_port_free() {
+  local pids; pids="$(port_intruders "$1" || true)"
+  [[ -z "$pids" ]] && return 0
+  echo -e "\e[31mERROR:\e[0m port $1 is used by another program, so NanoTag cannot start on it:" >&2
+  for pid in $pids; do
+    echo "   pid $pid  user $(ps -o user= -p "$pid" 2>/dev/null)  $(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null | cut -c1-120)" >&2
+  done
+  echo "   Stop it (e.g.  sudo kill $pids ) and run this again. If you still need it, give it another port." >&2
+  exit 1
+}
+
 
 switch_to() {
   ln -sfn "$1" /opt/nanotag/current.new && mv -Tf /opt/nanotag/current.new /opt/nanotag/current
@@ -67,7 +95,7 @@ if [[ $ROLLBACK -eq 1 ]]; then
   info "Rolling back: $PREV -> $OLD"
   switch_to "$OLD"
   systemctl restart nanotag-web nanotag-worker
-  health && info "Rolled back to $(basename "$OLD")." || die "Service unhealthy after rollback — check journalctl -u nanotag-web"
+  health "$(cat "$OLD/VERSION")" && info "Rolled back to $(basename "$OLD")." || die "Service unhealthy after rollback — check journalctl -u nanotag-web"
   echo "Note: database schema changes are not reverted; restore a backup from ${NANOTAG_DATA}/backups if needed."
   exit 0
 fi
@@ -85,6 +113,7 @@ trap 'if [[ -n "$TMPX" ]]; then rm -rf "$TMPX"; fi' EXIT
 NEWVER="$(cat "$SRC/VERSION")"; OLDVER="$(cat "$PREV/VERSION" 2>/dev/null || echo '?')"
 [[ "$(readlink -f "$SRC")" != "$PREV" ]] || die "That is the release already running."
 info "Updating NanoTag $OLDVER -> $NEWVER"
+check_port_free "$PORT"
 
 # ---------------------------------------------------------------- backup
 info "Backing up the database ..."
@@ -140,15 +169,20 @@ switch_to "$REL"
 nanotag-admin init
 systemctl restart nanotag-web
 systemctl start nanotag-worker
-if health && nanotag-admin check >/dev/null; then
-  info "NanoTag $NEWVER is up."
+if health "$NEWVER" && nanotag-admin check >/dev/null; then
+  info "NanoTag $NEWVER is up (answering on port $PORT)."
 else
   warn "Health check failed — rolling back to $(basename "$PREV")"
   journalctl -u nanotag-web -n 40 --no-pager || true
   switch_to "$PREV"
   systemctl restart nanotag-web nanotag-worker
-  health && die "Update failed; rolled back to $OLDVER (the database backup is in ${NANOTAG_DATA}/backups)." \
+  health "$OLDVER" && die "Update failed; rolled back to $OLDVER (the database backup is in ${NANOTAG_DATA}/backups)." \
          || die "Update failed and rollback is unhealthy too — check journalctl -u nanotag-web"
+fi
+
+# ---------------------------------------------------------------- extra import folders
+if [[ ${#IMPORT_ROOTS[@]} -gt 0 ]]; then
+  "$REL/deploy/add-import-root.sh" "${IMPORT_ROOTS[@]}"
 fi
 
 # ---------------------------------------------------------------- prune old releases

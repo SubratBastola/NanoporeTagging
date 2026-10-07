@@ -139,20 +139,23 @@ def abf_dest(exp_id, file_name):
     return d / safe_name(file_name)
 
 
-def register_recording(exp_id, file_name, abf_path, user, replace=False):
-    """Create (or attach to a 'missing' placeholder) a recording row. Returns (rec_id, created)."""
+def register_recording(exp_id, file_name, abf_path, user, replace=False, source_path=None):
+    """Create (or attach to a 'missing' placeholder) a recording row. Returns (rec_id, created).
+    The acquisition condition (DC/AC/AOM/baseline ...) is taken from the file name."""
+    from .naming import guess_condition
     stem = legacy.file_stem(file_name)
+    cond = guess_condition(file_name)
     with db() as con, tx(con):
         ex = one(con, "SELECT * FROM recordings WHERE experiment_id=? AND stem=?", (exp_id, stem))
         if ex:
             if ex["status"] != "missing" and not replace:
                 raise ValueError(f"A recording named '{file_name}' already exists in this experiment.")
-            con.execute("UPDATE recordings SET abf_path=?, file_name=?, status='pending', error=NULL WHERE id=?",
-                        (str(abf_path), file_name, ex["id"]))
+            con.execute("UPDATE recordings SET abf_path=?, file_name=?, status='pending', error=NULL, condition=?, "
+                        "source_path=? WHERE id=?", (str(abf_path), file_name, cond, source_path, ex["id"]))
             return ex["id"], False
-        cur = con.execute("""INSERT INTO recordings(experiment_id, file_name, stem, abf_path, status,
-                             created_by, created_at) VALUES (?,?,?,?, 'pending', ?, ?)""",
-                          (exp_id, file_name, stem, str(abf_path), user, now()))
+        cur = con.execute("""INSERT INTO recordings(experiment_id, file_name, stem, abf_path, status, condition,
+                             source_path, created_by, created_at) VALUES (?,?,?,?, 'pending', ?, ?, ?, ?)""",
+                          (exp_id, file_name, stem, str(abf_path), cond, source_path, user, now()))
         return cur.lastrowid, True
 
 
@@ -180,7 +183,8 @@ def job_import_files(params, ctx, job):
         else:
             shutil.copy2(src, dest)
         try:
-            rec_id, _ = register_recording(exp_id, src.name, dest, user, replace=bool(params.get("replace")))
+            rec_id, _ = register_recording(exp_id, src.name, dest, user, replace=bool(params.get("replace")),
+                                           source_path=str(src))
         except ValueError as e:
             ctx.log(f"  skipped: {e}")
             continue
@@ -324,6 +328,7 @@ def job_cluster(params, ctx, job):
         con.execute("UPDATE cluster_runs SET status='running' WHERE id=?", (run_id,))
     p = jload(run["params_json"], {})
     set_ids = jload(run["set_ids_json"], [])
+    conds = set(p.get("conditions") or [])      # empty = every recording
     out_dir = cfg().JOBS_DIR / f"cluster_run_{run_id}"
     if out_dir.exists():
         shutil.rmtree(out_dir)
@@ -336,8 +341,8 @@ def job_cluster(params, ctx, job):
     for sid in set_ids:
         s = A.get_set(sid)
         with db() as con:
-            recs = {r["id"]: r for r in rows(con, "SELECT id, file_name, stem FROM recordings WHERE experiment_id=?",
-                                             (s["experiment_id"],))}
+            recs = {r["id"]: r for r in rows(con, "SELECT id, file_name, stem, condition FROM recordings "
+                                             "WHERE experiment_id=?", (s["experiment_id"],))}
             exp = one(con, "SELECT name FROM experiments WHERE id=?", (s["experiment_id"],))
         evs = A.list_events(sid)
         by_rec = {}
@@ -345,6 +350,8 @@ def job_cluster(params, ctx, job):
             by_rec.setdefault(e["recording_id"], []).append(e)
         for rec_id, lst in by_rec.items():
             rec = recs[rec_id]
+            if conds and (rec["condition"] or "other") not in conds:
+                continue
             prefix = f"{_slug(exp['name'])}__{_slug(s['name'])}__" if multi else ""
             fname = f"{prefix}{rec['stem']}.csv"
             df = legacy.legacy_frame(lst, {rec_id: rec["file_name"]}, s["formula"])
@@ -354,7 +361,10 @@ def job_cluster(params, ctx, job):
             for i, e in enumerate(lst):
                 rowmap[(fname, i + 2)] = (e["id"], rec_id)
     if not paths:
-        raise ValueError("No events in the selected annotation set(s).")
+        raise ValueError("No events in the selected annotation set(s)"
+                         + (f" for condition(s) {', '.join(sorted(conds))}." if conds else "."))
+    if conds:
+        ctx.log(f"Conditions: {', '.join(sorted(conds))}")
     ctx.log(f"Prepared {len(paths)} input file(s), {len(rowmap)} event(s)")
     ctx.progress(0.05, "Running clustering (GMM sweep + bootstrap LRT) ...")
 
@@ -484,7 +494,13 @@ def job_import_bundle(params, ctx, job):
     return {"experiment_id": exp_id}
 
 
+def job_import_folder(params, ctx, job):
+    from .folder_import import job_import_folder as f
+    return f(params, ctx, job)
+
+
 JOB_FUNCS = {
+    "import_folder": job_import_folder,
     "ingest": job_ingest,
     "import_files": job_import_files,
     "nn": job_nn,

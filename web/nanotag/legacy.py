@@ -50,7 +50,16 @@ def _norm(s):
 def read_table_bytes(data: bytes, filename: str) -> pd.DataFrame:
     ext = os.path.splitext(filename)[1].lower()
     if ext == ".csv":
-        return pd.read_csv(io.BytesIO(data))
+        # UTF-8 (with or without the BOM Excel adds), then Windows-1252 for files saved on lab PCs
+        last = None
+        for enc in ("utf-8-sig", "cp1252", "latin-1"):
+            try:
+                df = pd.read_csv(io.BytesIO(data), encoding=enc, sep=None, engine="python")
+                df.columns = [str(c).strip() for c in df.columns]
+                return df
+            except UnicodeDecodeError as e:
+                last = e
+        raise last
     if ext in (".xlsx", ".xlsm", ".xls"):
         return pd.read_excel(io.BytesIO(data))
     raise ValueError(f"Unsupported file type: {ext} (use .csv or .xlsx)")
@@ -103,6 +112,22 @@ def load_legacy_frame(df_raw: pd.DataFrame) -> pd.DataFrame:
         dlist.append(d or None)
     out["_derived"] = dlist
     return out
+
+
+def norm_name(name) -> str:
+    """Forgiving key for matching file names: case, extension, Unicode look-alikes (e.g. non-breaking
+    spaces) and runs of spaces / underscores are ignored, so 'X  DC.abf', 'x dc.ABF' and 'X_DC' all match."""
+    import re
+    import unicodedata
+    if name is None or (isinstance(name, float) and math.isnan(name)):
+        return ""
+    s = unicodedata.normalize("NFKC", os.path.basename(str(name).strip().replace("\\", "/")))
+    low = s.lower()
+    for ext in (".fakeabf.npz", ".abf", ".csv", ".xlsx", ".xls"):
+        if low.endswith(ext):
+            s = s[: -len(ext)]
+            break
+    return re.sub(r"[\s_]+", " ", s).strip().lower()
 
 
 def file_stem(name) -> str:

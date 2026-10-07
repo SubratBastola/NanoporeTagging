@@ -12,7 +12,7 @@ from contextlib import contextmanager
 
 from .config import cfg
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS users (
@@ -225,7 +225,16 @@ def migrate(con=None):
         if v < 1:
             con.executescript(SCHEMA_V1)
             con.execute("PRAGMA user_version=1")
-        # future migrations: if v < 2: ...
+        if v < 2:
+            # v2: per-recording acquisition condition (DC / AC / AOM / baseline ...) and the folder the ABF
+            # came from (for ABFs used in place, abf_path == source_path and NanoTag never deletes them).
+            cols = {r[1] for r in con.execute("PRAGMA table_info(recordings)")}
+            if "condition" not in cols:
+                con.execute("ALTER TABLE recordings ADD COLUMN condition TEXT DEFAULT ''")
+            if "source_path" not in cols:
+                con.execute("ALTER TABLE recordings ADD COLUMN source_path TEXT")
+            con.execute("PRAGMA user_version=2")
+        # future migrations: if v < 3: ...
         return con.execute("PRAGMA user_version").fetchone()[0]
     finally:
         if own:

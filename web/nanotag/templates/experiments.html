@@ -1,12 +1,63 @@
 {% extends "base.html" %}
 {% block title %}Experiments{% endblock %}
+{% block sidenav %}
+<div class="sidetools">
+  <div class="ttl">Start here</div>
+  <a href="{{ url_for('import_page') }}" class="go">📂 Import a folder (ABF + CSV)</a>
+  <a href="#autoadd">➕ Upload ABF files</a>
+  <a href="{{ url_for('files_page') }}">📁 Pick files on the server</a>
+  <a href="{{ url_for('files_page') }}?kind=table">📄 Import event CSV</a>
+  <a href="#new">🧪 New empty experiment</a>
+  <a href="#bundle">📦 Import bundle</a>
+</div>
+{% endblock %}
 {% block content %}
 <h1>Experiments</h1>
+
+<div class="card" style="border-color:var(--accent)">
+  <div class="row">
+    <div style="flex:1;min-width:280px"><h2 style="margin:0">📂 Import a whole folder</h2>
+      <span class="muted small">Every ABF + its <code>_event.csv</code>; DC / AC / AOM runs of one sample are collected
+        into one experiment automatically. Files already on the server are used in place — no copying.</span></div>
+    <a class="act primary" href="{{ url_for('import_page') }}"><span class="ic">📂</span>Import a folder…</a>
+  </div>
+</div>
+
+<div class="card" id="autoadd">
+  <h2 style="margin-top:0">➕ Add ABF files — the experiment is worked out from the file name</h2>
+  <p class="muted small">e.g. <code>2026_09_14_0001 B3S8-15 100 aM SiO2 DC.abf</code> goes into experiment
+    <code>2026_09_14 B3S8-15 100 aM SiO2</code> — the run number and DC/AC word are dropped, so all files of one day and sample go together (created if needed). Files already on the server:
+    use <a href="{{ url_for('files_page') }}">📁 Files</a>.</p>
+  <div class="dropzone" id="xz">Drop .abf files here or <label style="color:var(--accent);cursor:pointer"><b>choose files</b>
+    <input type="file" id="xf" multiple accept=".abf" style="display:none"></label></div>
+  <div class="small muted" id="xguess"></div>
+  <div class="uplist" id="xl"></div>
+</div>
+
+<div class="steps">
+  <div><b>1 · Add recordings</b><span class="small muted">Create an experiment, then upload ABFs or pick them from
+    <a href="{{ url_for('files_page') }}">server folders</a>.</span></div>
+  <div><b>2 · Tag events</b><span class="small muted">Import window/event CSVs or tag in the Tagger — everyone’s edits are
+    shared and attributed.</span></div>
+  <div><b>3 · Neural network</b><span class="small muted">Detect landmarks in every window with the NN; review the result
+    in the Tagger.</span></div>
+  <div><b>4 · Cluster & export</b><span class="small muted">Run clustering, open the HTML report, download CSV/XLSX and
+    the full outputs.</span></div>
+</div>
+
+<form method="get" action="{{ url_for('experiments_delete_confirm') }}" id="expform">
 <div class="card">
+  {% if deletable %}
+  <div class="row" style="margin-bottom:6px">
+    <button class="danger small" id="delsel" disabled>🗑 Delete selected…</button>
+    <span class="small muted" id="delcount"></span>
+  </div>
+  {% endif %}
   <table class="t">
-    <tr><th>Name</th><th>Recordings</th><th>Size</th><th>Sensor / analytes / solution</th><th>Created</th><th></th></tr>
+    <tr><th>{% if deletable %}<input type="checkbox" id="expall" title="select all you may delete">{% endif %}</th><th>Name</th><th>Recordings</th><th>Size</th><th>Sensor / analytes / solution</th><th>Created</th><th>Go to</th></tr>
     {% for e in exps %}{% set s = stats.get(e.id) %}
     <tr>
+      <td>{% if e.id in deletable %}<input type="checkbox" name="ids" value="{{ e.id }}" class="expsel">{% endif %}</td>
       <td><a href="{{ url_for('experiment', exp_id=e.id) }}"><b>{{ e.name }}</b></a>
         {% if e.restricted %}<span class="badge locked">restricted</span>{% endif %}
         <div class="muted small">{{ e.description }}</div></td>
@@ -14,17 +65,28 @@
       <td>{{ fmt_bytes(s.bytes) if s else '' }}</td>
       <td class="small">{{ e.sensor }} · {{ e.analytes }} · {{ e.solution }}</td>
       <td class="small">{{ fmt_ts(e.created_at) }}<br>{{ e.created_by }}</td>
-      <td><a class="btn" href="{{ url_for('experiment', exp_id=e.id) }}">Open</a></td>
+      <td class="row">
+        <a class="btn primary small" href="{{ url_for('experiment', exp_id=e.id) }}#recordings">Open</a>
+        <a class="btn small" href="{{ url_for('experiment', exp_id=e.id) }}#recordings">➕ Files</a>
+        <a class="btn small" href="{{ url_for('experiment', exp_id=e.id) }}#annotations">🏷 Tag / CSV</a>
+        <a class="btn small" href="{{ url_for('experiment', exp_id=e.id) }}#nn">🧠 NN</a>
+        <a class="btn small" href="{{ url_for('experiment', exp_id=e.id) }}#clustering">📊 Cluster</a>
+        <a class="btn small" href="{{ url_for('experiment', exp_id=e.id) }}#export">⬇ Export</a>
+        {% if e.id in deletable %}<a class="btn small" style="color:var(--err)"
+           href="{{ url_for('experiments_delete_confirm', ids=e.id) }}" title="Delete this experiment…">🗑</a>{% endif %}
+      </td>
     </tr>
     {% else %}
-    <tr><td colspan="6" class="muted">No experiments yet — create one below.</td></tr>
+    <tr><td colspan="7" class="muted">No experiments yet — <a href="{{ url_for('import_page') }}">import a folder</a>
+      or create one below.</td></tr>
     {% endfor %}
   </table>
 </div>
+</form>
 
 <div class="grid2">
-  <div class="card">
-    <h2 style="margin-top:0">New experiment</h2>
+  <div class="card" id="new">
+    <h2 style="margin-top:0">➕ New experiment</h2>
     <form method="post" action="{{ url_for('experiment_new') }}">
       <p><input type="text" name="name" placeholder="Name (e.g. 2026-09-14 SiO2 100 aM)" required style="width:100%"></p>
       <p><textarea name="description" placeholder="Description" style="width:100%" rows="2"></textarea></p>
@@ -33,19 +95,37 @@
         <input type="text" name="analytes" placeholder="Analytes">
         <input type="text" name="solution" placeholder="Solution">
       </div>
-      <p><button class="primary">Create</button></p>
+      <p><button class="primary">Create and add files →</button></p>
     </form>
   </div>
-  <div class="card">
-    <h2 style="margin-top:0">Import experiment bundle (.zip)</h2>
-    <p class="muted small">A bundle exported from this server (annotation sets, history and optionally the ABFs).
+  <div class="card" id="bundle">
+    <h2 style="margin-top:0">📦 Import experiment bundle (.zip)</h2>
+    <p class="muted small">A bundle exported from a NanoTag server (annotation sets, history and optionally the ABFs).
       Recordings without an ABF in the bundle are created as “missing”; import the ABFs afterwards and they attach by file name.</p>
-    <div class="dropzone" id="bz">Drop a bundle .zip here or <label style="color:var(--accent);cursor:pointer">choose
+    <div class="dropzone" id="bz">Drop a bundle .zip here or <label style="color:var(--accent);cursor:pointer"><b>choose</b>
       <input type="file" id="bf" accept=".zip" style="display:none"></label></div>
     <div class="uplist" id="bl"></div>
   </div>
 </div>
 <script>
+(() => {
+  const boxes = () => Array.from(document.querySelectorAll('.expsel'));
+  const upd = () => {
+    const n = boxes().filter(b => b.checked).length, btn = document.getElementById('delsel');
+    if (btn) { btn.disabled = n === 0; document.getElementById('delcount').textContent = n ? `${n} selected` : ''; }
+  };
+  boxes().forEach(b => b.onchange = upd);
+  const all = document.getElementById('expall');
+  if (all) all.onchange = () => { boxes().forEach(b => b.checked = all.checked); upd(); };
+})();
 setupUploader('bz', 'bf', 'bl', {purpose: 'bundle'}, () => setTimeout(() => location.href = '/jobs', 1500));
+setupUploader('xz', 'xf', 'xl', {purpose: 'abf', experiment_id: 'auto'}, () => setTimeout(() => location.reload(), 1200));
+// preview which experiment each chosen file will go to
+document.getElementById('xf').addEventListener('change', async e => {
+  const q = Array.from(e.target.files).map(f => 'name=' + encodeURIComponent(f.name)).join('&');
+  if (!q) return;
+  const d = await (await fetch('/api/guess-experiment?' + q)).json();
+  document.getElementById('xguess').innerHTML = d.map(x => `${x.file} → <b>${x.experiment}</b>${x.exists ? '' : ' (new)'}`).join('<br>');
+}, true);
 </script>
 {% endblock %}
