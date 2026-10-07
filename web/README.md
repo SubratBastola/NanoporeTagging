@@ -6,7 +6,7 @@ the same annotation sets, and every edit records who made it. The NN and cluster
 background jobs, and clustering produces the same outputs and HTML report as `clustering.py`.
 
 ```
- browser (VPN) ──HTTP :8050──▶ nanotag-web (gunicorn: Flask pages + Dash Tagger)
+ browser (VPN) ──HTTP :3389──▶ nanotag-web (gunicorn: Flask pages + Dash Tagger)
                                    │  reads only the visible time range
                                    ▼
                       /srv/nanotag/zarr   Tagger-filtered 10 kHz signal + min/max zoom levels (~2 % of ABF size)
@@ -24,18 +24,36 @@ background jobs, and clustering produces the same outputs and HTML report as `cl
 Tested on Ubuntu 24.04 (the ANIServer kernel 6.8 is 24.04). The server needs internet access during
 install for apt and pip.
 
-**Network model.** The web port (8050) is open to **all IP addresses**. That is safe here because
-the university firewall already blocks outside traffic, so only people on campus or on the VPN can
-reach the server, and everyone still has to log in. Nothing needs to be opened on the university
-firewall.
+**Network model.** The web port is **3389** by default and is open to **all IP addresses**. Over the
+VPN only SSH (22) and RDP (3389) reach the lab machine and IT will not open other ports, so NanoTag
+takes over the RDP port and SSH stays for administration. That is safe here because the university
+firewall already blocks outside traffic, so only people on campus or on the VPN can reach the server,
+and everyone still has to log in. Nothing needs to be opened on the university firewall.
+
+**Turn RDP off first.** If anything else holds port 3389, the installer stops before installing and
+prints the commands. On ANIServer the RDP server is GNOME remote desktop (Wayland). From an **SSH**
+session (this ends any RDP session):
+
+```bash
+sudo grdctl --system rdp disable
+sudo systemctl disable --now gnome-remote-desktop
+```
+
+If remote desktop is per-user Desktop Sharing instead, switch it off under Settings → System →
+Remote Desktop (for xrdp: `sudo systemctl disable --now xrdp`). To keep RDP, use `--port N`.
+
+**Moving an existing 8050 install to 3389:** turn RDP off as above, then rerun
+`sudo ./deploy/install.sh --allow-all` from the new release folder. It is idempotent: it keeps the
+database, users and secret key, rewrites `NANOTAG_PORT` in `/etc/nanotag/nanotag.env` and replaces
+the old ufw rule. `update.sh` alone keeps whatever port the env file already has.
 
 ```bash
 # on your laptop
-scp nanotag-0.1.9.tar.gz oguz@ANIServer:~
+scp nanotag-0.1.10.tar.gz oguz@ANIServer:~
 
 # on ANIServer
-tar xzf nanotag-0.1.9.tar.gz
-cd nanotag-0.1.9
+tar xzf nanotag-0.1.10.tar.gz
+cd nanotag-0.1.10
 sudo ./deploy/install.sh --allow-all --import-root /home/oguz/NanoporeTagging
 ```
 
@@ -53,19 +71,19 @@ The script is idempotent, so running it again is safe. It:
 - creates the database and the **admin / admin2025!!** account;
 - registers `best_opt_strict.pt` as the default model;
 - installs the `nanotag-web`, `nanotag-worker` and nightly backup systemd services;
-- opens port 8050 in ufw to all addresses (`--allow-all`) or only to the `--allow` networks;
+- opens port 3389 in ufw to all addresses (`--allow-all`) or only to the `--allow` networks;
 - runs a health check.
 
 Firewall behaviour:
 
-- If `ufw` is already active, the port-8050 rule is added and nothing else changes.
+- If `ufw` is already active, the port-3389 rule is added and nothing else changes.
 - If `ufw` is inactive (the Ubuntu default), the port is already reachable. The rule is saved for
   later, and the script does not turn ufw on unless you add `--enable-ufw` (SSH is always allowed
   first). Use `--no-firewall` to leave the firewall untouched.
 
 Then:
 
-1. Open `http://<ANIServer-IP>:8050` from any computer on campus or on the VPN.
+1. Open `http://<ANIServer-IP>:3389` from any computer on campus or on the VPN.
 2. Log in as **admin / admin2025!!**, then change the password with **🔑 Change password** in the
    upper-left menu (a banner reminds you until you do).
 3. Add people on the **Admin** page, or with `sudo nanotag-admin add-user alice`.
@@ -212,7 +230,11 @@ An annotation set is a named collection of events across all recordings of the e
     Everything works there too — add events and windows, delete, drag guides, edit notes; each change
     is saved to the recording under it (an event's 7 points must be in one file). Unticking returns to
     the file in the middle of the view.
-  - **Navigation:** ✋ **Pan** (top) drags all channels together in time with Y held; ◀ ▶ step half a
+  - **Navigation:** ✋ **Pan** (top) drags all channels together in time with Y held; the cursor
+    becomes a hand and a ✋ badge shows on the plot. Turning Pan on in Add Event, Add Window or Delete
+    Events pauses that mode (the Mode box shows Zoom/Inspect); turning Pan off returns to it, and
+    Add Event keeps the points already clicked, so you can pan to the next landmark mid-event.
+    Choosing a mode by hand while panning ends the pause. ◀ ▶ step half a
     window. **Thumbwheels** (IRIX style): the vertical wheel left of the plot zooms Y (pick the channel,
     or *all*, under it), the horizontal wheel below zooms X. Drag, or scroll over a wheel;
     double-click resets. **Toggle Side Panel** hides the event table to widen the plot.

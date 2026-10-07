@@ -56,6 +56,13 @@ ALWAYS_COLS = {"event_id", "status", "notes"}
 EDITABLE_COLS = {"notes"}
 
 
+# Pan pauses the modes that need a click or drag of their own; turning Pan off restores the mode.
+PAN_SUSPENDS = ("add", "window", "delete")
+PANST_OFF = {"prev": None, "skip": None}
+MODE_NAMES = {"zoom": "Zoom/Inspect", "add": "Add Event", "window": "Add Window", "delete": "Delete Events",
+              "edit": "Edit Points"}
+
+
 def label_texts(short, long=False):
     return [f"{s} ({POINT_LABELS.get(s, POINT_LABELS.get('O' + s[1:], ''))})" for s in short] if long else short
 
@@ -268,7 +275,7 @@ def read_concat(segs, ch, t0, t1, budget):
 
 # ----------------------------------------------------------------- figure
 def build_figure(ctx, segs, events, window, zoom, click, visible, mode, sel, long_labels, authors_on,
-                 color_by_author, budget, allf=False, drag="zoom"):
+                 color_by_author, budget, allf=False, drag="zoom", paused=None):
     order = channel_order(ctx, visible)
     if not order:
         order = [ctx["roles"]["opt"]]
@@ -362,7 +369,8 @@ def build_figure(ctx, segs, events, window, zoom, click, visible, mode, sel, lon
                                      name=key if color_by_author else "events", hoverinfo="skip"))
 
     # ---- pending clicks (Add mode) ----
-    if click and mode == "add":
+    # pending Add Event clicks stay drawn while Pan has paused Add Event
+    if click and (mode == "add" or paused == "add"):
         cs = seg_by_rec.get(click.get("rec")) or segs[0]
         off = cs["offset"]
         ot = click.get("optical_times") or []
@@ -463,7 +471,13 @@ def build_figure(ctx, segs, events, window, zoom, click, visible, mode, sel, lon
             domain=[max(0.0, top - h), top], range=y_ranges[ch], fixedrange=(drag == "pan"),
             title=dict(text=ch_label(ctx, ch) + role, font=dict(size=11)))
     fig.update_layout(**layout)
-    if mode == "add":
+    if drag == "pan" and paused:
+        fig.add_annotation(
+            text=f"✋ Pan — {MODE_NAMES.get(paused, paused)} paused"
+                 + (f" ({_add_mode_text(click)})" if paused == "add" else "") + " · click ✋ Pan again to resume",
+            x=0.5, xref="paper", y=1.0, yref="paper", yanchor="bottom", showarrow=False,
+            font=dict(size=12, color="#7c2d12"), bgcolor="#ffedd5", bordercolor="#fdba74", borderwidth=1, borderpad=4)
+    elif mode == "add":
         fig.add_annotation(text=_add_mode_text(click), x=0.5, xref="paper", y=1.0, yref="paper", yanchor="bottom",
                            showarrow=False, font=dict(size=12, color="#1f3a8a"), bgcolor="#eef2ff",
                            bordercolor="#c7d2fe", borderwidth=1, borderpad=4)
@@ -572,16 +586,23 @@ INDEX_EXTRA = """{%scripts%}
 .nt-wheel { position: relative; border-radius: 6px; cursor: grab; user-select: none; border: 1px solid #94a3b8;
   box-shadow: inset 0 0 6px #0005; }
 .nt-wheel:active { cursor: grabbing; }
-.nt-wheel.v { width: 22px; height: 230px;
+/* thumbwheels at 90 % of the 0.1.9 size (was 22 x 230 and 360 x 22 px) */
+.nt-wheel.v { width: 20px; height: 207px;
   background-image: linear-gradient(90deg, #0004, #fff0 30%, #fff0 70%, #0004),
                     repeating-linear-gradient(180deg, #cbd5e1 0 3px, #64748b 3px 5px); }
-.nt-wheel.h { height: 22px; width: 360px;
+.nt-wheel.h { height: 20px; width: 324px;
   background-image: linear-gradient(180deg, #0004, #fff0 30%, #fff0 70%, #0004),
                     repeating-linear-gradient(90deg, #cbd5e1 0 3px, #64748b 3px 5px); }
 .nt-wlab { font-size: 11px; color: #475569; font-weight: 700; text-align: center; }
 .nt-tbtn { margin-right: 4px; padding: 3px 9px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff;
   cursor: pointer; font-weight: 600; }
 .nt-tbtn.on { background: #1f3a8a; color: #fff; border-color: #1f3a8a; }
+/* Pan on: hand cursor over the plot (open hand, closed while dragging) and a hand badge on the plot */
+body.nt-pan #graph .js-plotly-plot .plotly .draglayer .nsewdrag { cursor: grab !important; }
+body.nt-pan .dragcover { cursor: grabbing !important; }
+#pan-badge { display: none; position: absolute; top: 6px; left: 8px; z-index: 5; font-size: 26px; line-height: 1;
+  padding: 4px 6px; background: #ffedd5; border: 1px solid #fdba74; border-radius: 8px; pointer-events: none; }
+body.nt-pan #pan-badge { display: block; }
 </style>
 <script>
 (function () {
@@ -685,7 +706,7 @@ def init_tagger(server):
         dcc.Store(id="ctx"), dcc.Store(id="events", data=[]), dcc.Store(id="rev"),
         dcc.Store(id="window"), dcc.Store(id="nav", data=0), dcc.Store(id="zoom", data={}),
         dcc.Store(id="click", data={"stage": "idle"}), dcc.Store(id="sel"), dcc.Store(id="tmap"),
-        dcc.Store(id="drag", data="zoom"),
+        dcc.Store(id="drag", data="zoom"), dcc.Store(id="panst", data=dict(PANST_OFF)), dcc.Store(id="pan-cls"),
         dcc.Interval(id="poll", interval=10000),
         dcc.Download(id="download"),
         html.Div([
@@ -766,7 +787,8 @@ def init_tagger(server):
                                   style={"marginLeft": "14px", "fontWeight": 600, "color": "#1f3a8a"}),
                     html.Span([
                         html.Button("✋ Pan", id="pan-mode", className="nt-tbtn",
-                                    title="Drag to pan all channels together (Y stays fixed)"),
+                                    title="Drag to pan all channels together (Y stays fixed). Add Event, Add Window "
+                                          "and Delete pause while Pan is on and resume when you turn it off."),
                         html.Button("◀", id="pan-l", className="nt-tbtn", title="Pan left by half a window"),
                         html.Button("▶", id="pan-r", className="nt-tbtn", title="Pan right by half a window"),
                     ], style={"marginLeft": "14px"}),
@@ -783,10 +805,14 @@ def init_tagger(server):
                         html.Div(id="nt-ysel", style={"marginTop": "4px"}),
                     ], style={"display": "flex", "flexDirection": "column", "alignItems": "center",
                               "justifyContent": "center", "padding": "0 2px"}),
-                    dcc.Graph(id="graph", style={"height": "78vh", "flex": "1 1 auto", "minWidth": "0"}, config={
-                        "scrollZoom": True, "doubleClick": "reset", "displaylogo": False,
-                        "modeBarButtonsToRemove": ["lasso2d", "zoomIn2d", "zoomOut2d", "autoScale2d", "resetScale2d"],
-                        "edits": {"shapePosition": True}, "responsive": True}),
+                    html.Div([
+                        dcc.Graph(id="graph", style={"height": "78vh"}, config={
+                            "scrollZoom": True, "doubleClick": "reset", "displaylogo": False,
+                            "modeBarButtonsToRemove": ["lasso2d", "zoomIn2d", "zoomOut2d", "autoScale2d",
+                                                       "resetScale2d"],
+                            "edits": {"shapePosition": True}, "responsive": True}),
+                        html.Div("✋", id="pan-badge", title="Pan is on"),
+                    ], style={"flex": "1 1 auto", "minWidth": "0", "position": "relative"}),
                 ], style={"display": "flex", "alignItems": "stretch"}),
                 html.Div([
                     html.Span("X", className="nt-wlab", style={"marginRight": "6px"}),
@@ -922,19 +948,36 @@ def init_tagger(server):
         return fetch_events(ctx), cur, [{"label": a, "value": a} for a in A.authors(ctx["set_id"])]
 
     # ------------------------------------------------------------ pan mode
-    @app.callback(Output("drag", "data"), Output("pan-mode", "className"), Input("pan-mode", "n_clicks"),
-                  State("drag", "data"), prevent_initial_call=True)
-    def pan_mode(n, drag):
-        new = "zoom" if drag == "pan" else "pan"
-        return new, "nt-tbtn on" if new == "pan" else "nt-tbtn"
+    @app.callback(Output("drag", "data"), Output("pan-mode", "className"),
+                  Output("mode", "value", allow_duplicate=True), Output("panst", "data"),
+                  Input("pan-mode", "n_clicks"), State("drag", "data"), State("mode", "value"), State("panst", "data"),
+                  prevent_initial_call=True)
+    def pan_mode(n, drag, mode, panst):
+        panst = panst or PANST_OFF
+        if drag != "pan":
+            # Pan on: Add Event / Add Window / Delete switch to Zoom/Inspect until Pan is turned off
+            prev = mode if mode in PAN_SUSPENDS else None
+            return "pan", "nt-tbtn on", ("zoom" if prev else no_update), {"prev": prev, "skip": "zoom" if prev else None}
+        # Pan off: back to the mode that was active before Pan (pending Add Event clicks are kept)
+        prev = panst.get("prev")
+        return "zoom", "nt-tbtn", (prev if prev else no_update), {"prev": None, "skip": prev}
+
+    # body class for the hand cursor and badge (Plotly's drag cover is outside the app div)
+    app.clientside_callback(
+        """function (drag) {
+            document.body.classList.toggle('nt-pan', drag === 'pan');
+            return drag === 'pan';
+        }""",
+        Output("pan-cls", "data"), Input("drag", "data"))
 
     # ------------------------------------------------------------ render
     @app.callback(Output("graph", "figure"), Output("tmap", "data"),
                   Input("events", "data"), Input("window", "data"), Input("nav", "data"), Input("zoom", "data"),
                   Input("click", "data"), Input("vis", "value"), Input("mode", "value"), Input("sel", "data"),
                   Input("opts", "value"), Input("authors", "value"), Input("budget", "value"), Input("drag", "data"),
-                  State("ctx", "data"), State("rev", "data"), State("allfiles", "value"))
-    def render(events, window, nav, zoom, click, vis, mode, sel, opts, authors_on, budget, drag, ctx, rev, allf):
+                  State("ctx", "data"), State("rev", "data"), State("allfiles", "value"), State("panst", "data"))
+    def render(events, window, nav, zoom, click, vis, mode, sel, opts, authors_on, budget, drag, ctx, rev, allf,
+               panst):
         if not ctx or not window:
             return go.Figure(), None
         opts = opts or []
@@ -942,7 +985,8 @@ def init_tagger(server):
         evs = view_events(ctx, segs, allf, events)
         fig, tmap = build_figure(ctx, segs, evs, window, zoom or {}, click, vis or [], mode, sel,
                                  "long" in opts, authors_on, "author" in opts, int(budget or 8000),
-                                 allf=bool(allf), drag=drag or "zoom")
+                                 allf=bool(allf), drag=drag or "zoom",
+                                 paused=(panst or {}).get("prev") if drag == "pan" else None)
         fig.update_layout(uirevision=f"{'all' if allf else ctx['rec_id']}-{nav}")
         return fig, tmap
 
@@ -1156,16 +1200,28 @@ def init_tagger(server):
                 "Electrical point 4/4 recorded  Event saved" + (f" in {s['label']}." if allf else "."))
 
     @app.callback(Output("click", "data", allow_duplicate=True), Output("sel", "data", allow_duplicate=True),
+                  Output("panst", "data", allow_duplicate=True), Output("drag", "data", allow_duplicate=True),
+                  Output("pan-mode", "className", allow_duplicate=True),
                   Input("mode", "value"), State("ctx", "data"), State("events", "data"), State("window", "data"),
-                  State("sel", "data"), State("allfiles", "value"), prevent_initial_call=True)
-    def mode_change(mode, ctx, events, window, sel, allf):
+                  State("sel", "data"), State("allfiles", "value"), State("panst", "data"), State("drag", "data"),
+                  prevent_initial_call=True)
+    def mode_change(mode, ctx, events, window, sel, allf, panst, drag):
+        panst = panst or PANST_OFF
+        if panst.get("skip") == mode:
+            # this change came from the Pan button (pause or resume): keep pending Add Event clicks
+            return no_update, no_update, dict(panst, skip=None), no_update, no_update
+        pan_out = (no_update, no_update, no_update)
+        if drag == "pan":
+            # a mode picked by hand while panning wins; a click/drag mode needs the mouse, so Pan turns off
+            pan_out = ((dict(PANST_OFF), "zoom", "nt-tbtn") if mode in PAN_SUSPENDS
+                       else (dict(PANST_OFF), no_update, no_update))
         click = {"stage": "optical" if mode == "add" else "idle", "optical_times": [], "electrical_times": []}
         if mode == "edit" and not sel and ctx and window:
             evs = [e for e in view_events(ctx, segments(ctx, allf), allf, events) if _ev_span(e)[0] is not None]
             if evs:
                 c = (window[0] + window[1]) / 2.0
                 sel = min(evs, key=lambda e: abs(np.mean(_ev_span(e)) - c))["id"]
-        return click, sel
+        return (click, sel) + pan_out
 
     @app.callback(Output("click", "data", allow_duplicate=True), Output("msg", "children", allow_duplicate=True),
                   Input("undo", "n_clicks"), Input("discard", "n_clicks"), State("click", "data"),
