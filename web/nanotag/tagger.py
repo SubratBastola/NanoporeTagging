@@ -54,6 +54,7 @@ TABLE_COLS = ["event_id", "file", "status", "window_start", "window_end", "event
               "updated_by"]
 ALWAYS_COLS = {"event_id", "status", "notes"}
 EDITABLE_COLS = {"notes"}
+TABLE_PAGE = 2000       # rows per table page; sets up to this size scroll as one list
 
 
 # Pan pauses the modes that need a click or drag of their own; turning Pan off restores the mode.
@@ -603,6 +604,9 @@ body.nt-pan .dragcover { cursor: grabbing !important; }
 #pan-badge { display: none; position: absolute; top: 6px; left: 8px; z-index: 5; font-size: 26px; line-height: 1;
   padding: 4px 6px; background: #ffedd5; border: 1px solid #fdba74; border-radius: 8px; pointer-events: none; }
 body.nt-pan #pan-badge { display: block; }
+/* middle mouse button held: temporary pan (closed hand everywhere, badge shown) */
+body.nt-mpan, body.nt-mpan * { cursor: grabbing !important; }
+body.nt-mpan #pan-badge { display: block; }
 </style>
 <script>
 (function () {
@@ -676,6 +680,63 @@ body.nt-pan #pan-badge { display: block; }
     else yAxes().forEach(a => { upd[a.ax + '.autorange'] = true; });
     Plotly.relayout(g, upd);
   });
+  // ------------------------------------------------ middle mouse button = temporary Pan
+  // Hold the middle button and drag to pan in any mode (Add Event, Add Window, Delete, Edit ...). Nothing
+  // about the mode changes, pending Add Event clicks are kept, and on release the view goes back to what
+  // you were doing. Like the thumbwheels, the plot moves instantly in the browser and the server is asked
+  // once, on release, for the right detail of the new range. Plotly never sees the middle button.
+  let mpan = null, mraf = 0;
+  function plotBox(g) {
+    const fl = g._fullLayout; if (!fl || !fl._size) return null;
+    const r = g.getBoundingClientRect(), s = fl._size;
+    return {left: r.left + s.l, width: s.w};
+  }
+  function stop(e) { e.preventDefault(); e.stopPropagation(); }
+  function endMpan(commitIt) {
+    const p = mpan; mpan = null;
+    document.body.classList.remove('nt-mpan');
+    if (mraf) { cancelAnimationFrame(mraf); mraf = 0; }
+    const g = gd();
+    if (!p || !g) return;
+    if (commitIt && p.moved && p.range) {
+      g.layout.xaxis.range = p.range;
+      Plotly.relayout(g, {'xaxis.range[0]': +p.range[0], 'xaxis.range[1]': +p.range[1]});
+    }
+  }
+  document.addEventListener('mousedown', e => {
+    if (e.button !== 1) return;
+    const g = gd(); if (!g || !g.contains(e.target) || !g.layout || !g.layout.xaxis) return;
+    stop(e);                                   // no browser autoscroll, no Plotly click/zoom
+    const box = plotBox(g); if (!box || !box.width) return;
+    mpan = {x: e.clientX, r0: g.layout.xaxis.range.map(Number), w: box.width, moved: false, range: null};
+    document.body.classList.add('nt-mpan');
+  }, true);
+  document.addEventListener('mousemove', e => {
+    if (!mpan) return;
+    stop(e);
+    if ((e.buttons & 4) === 0) { endMpan(true); return; }   // button released outside the window
+    const dx = e.clientX - mpan.x;
+    if (Math.abs(dx) >= 2) mpan.moved = true;
+    const shift = -dx * (mpan.r0[1] - mpan.r0[0]) / mpan.w;
+    mpan.range = [mpan.r0[0] + shift, mpan.r0[1] + shift];
+    if (!mraf) mraf = requestAnimationFrame(() => {
+      mraf = 0;
+      const g = gd(); if (!g || !mpan || !mpan.range) return;
+      g.layout.xaxis.range = mpan.range; g.layout.xaxis.autorange = false;
+      Plotly.react(g, g.data, g.layout);
+    });
+  }, true);
+  document.addEventListener('mouseup', e => {
+    if (!mpan) return;
+    stop(e);
+    endMpan(true);
+  }, true);
+  ['auxclick', 'click'].forEach(t => document.addEventListener(t, e => {
+    const g = gd();
+    if (e.button === 1 && g && g.contains(e.target)) stop(e);
+  }, true));
+  window.addEventListener('blur', () => { if (mpan) endMpan(true); });
+
   // keep the Y-wheel channel list in step with the channels shown
   setInterval(() => {
     const g = gd(), box = document.getElementById('nt-ysel');
@@ -740,6 +801,7 @@ def init_tagger(server):
                 html.Div("Add: click 3 points on Optical/OpticalRe (start, plateau, end), then 4 on Electrical "
                          "(entry base, entry peak, exit peak, exit base). Window: drag a rectangle. Delete: drag a "
                          "rectangle to remove events in that range. Edit: select a row, then drag the guides. "
+                         "Hold the middle mouse button and drag to pan in any mode. "
                          "Changes save immediately — also in the all-files view.", style={**small, "margin": "6px 0"}),
                 html.Div([html.Button("Undo Last Point", id="undo", style=btn),
                           html.Button("Discard Pending Event", id="discard")]),
@@ -788,7 +850,8 @@ def init_tagger(server):
                     html.Span([
                         html.Button("✋ Pan", id="pan-mode", className="nt-tbtn",
                                     title="Drag to pan all channels together (Y stays fixed). Add Event, Add Window "
-                                          "and Delete pause while Pan is on and resume when you turn it off."),
+                                          "and Delete pause while Pan is on and resume when you turn it off. Tip: holding the "
+                                          "middle mouse button pans temporarily in any mode."),
                         html.Button("◀", id="pan-l", className="nt-tbtn", title="Pan left by half a window"),
                         html.Button("▶", id="pan-r", className="nt-tbtn", title="Pan right by half a window"),
                     ], style={"marginLeft": "14px"}),
@@ -822,16 +885,22 @@ def init_tagger(server):
             ], style={"flex": "1 1 auto", "minWidth": "600px"}),
             html.Div([
                 html.Div("Events", id="table-title", style={"fontWeight": 600}),
+                # Every event in one scrolling list (no 25-row pages): the header stays put and the body
+                # scrolls, so all events of a set — also in the all-files view — can be reached. Pages of
+                # TABLE_PAGE rows only kick in for very large NN sets, to keep the browser responsive.
                 dash_table.DataTable(
                     id="table", columns=table_columns([]),
-                    data=[], row_selectable="single", page_size=25, sort_action="native", filter_action="native",
-                    style_table={"height": "68vh", "overflowY": "auto", "overflowX": "auto"},
+                    data=[], row_selectable="single", page_action="native", page_size=TABLE_PAGE,
+                    sort_action="native", filter_action="native", fixed_rows={"headers": True},
+                    style_table={"height": "calc(100vh - 150px)", "minHeight": "320px", "overflowY": "scroll",
+                                 "overflowX": "auto"},
                     style_cell={"fontSize": 12, "padding": "4px", "textAlign": "left", "minWidth": "60px",
-                                "maxWidth": "180px", "whiteSpace": "nowrap", "overflow": "hidden",
+                                "width": "90px", "maxWidth": "180px", "whiteSpace": "nowrap", "overflow": "hidden",
                                 "textOverflow": "ellipsis"},
                     style_header={"fontWeight": 600}),
                 html.Div([html.Button("Delete selected", id="del-row", style=btn),
                           html.Button("Export this recording (CSV)", id="export")], style={"marginTop": "6px"}),
+                dcc.Store(id="table-scroll"),
             ], id="side", style={"flex": "0 0 520px", "padding": "8px", "borderLeft": "1px solid #eee"}),
         ], style={"display": "flex", "alignItems": "stretch"}),
     ], style={"fontFamily": "-apple-system, Segoe UI, Helvetica, Arial, sans-serif"})
@@ -936,16 +1005,34 @@ def init_tagger(server):
 
     # ------------------------------------------------------------ polling for other users' edits
     @app.callback(Output("events", "data", allow_duplicate=True), Output("rev", "data", allow_duplicate=True),
-                  Output("authors", "options", allow_duplicate=True),
                   Input("poll", "n_intervals"), State("ctx", "data"), State("rev", "data"),
                   prevent_initial_call=True)
     def poll(_, ctx, rev):
         if not ctx:
-            return no_update, no_update, no_update
+            return no_update, no_update
         cur = A.revision(ctx["set_id"])
         if cur == rev:
-            return no_update, no_update, no_update
-        return fetch_events(ctx), cur, [{"label": a, "value": a} for a in A.authors(ctx["set_id"])]
+            return no_update, no_update
+        return fetch_events(ctx), cur      # the author list follows in authors_sync
+
+    # ------------------------------------------------------------ "Show events by" follows new authors
+    # The author filter used to be filled only when the page loaded. On a set with no events yet (or when
+    # someone tagged for the first time) the new author was not ticked, so freshly added events were saved
+    # but filtered out of the plot until the next page load. Any author not seen before is now ticked as it
+    # appears; authors you untick yourself stay unticked.
+    @app.callback(Output("authors", "options", allow_duplicate=True), Output("authors", "value", allow_duplicate=True),
+                  Input("events", "data"), State("ctx", "data"), State("authors", "options"),
+                  State("authors", "value"), prevent_initial_call=True)
+    def authors_sync(events, ctx, opts, val):
+        if not ctx:
+            return no_update, no_update
+        names = A.authors(ctx["set_id"])
+        known = [o["value"] for o in (opts or [])]
+        if names == known:
+            return no_update, no_update
+        new = [a for a in names if a not in known]
+        keep = [a for a in (val or []) if a in names]
+        return [{"label": a, "value": a} for a in names], keep + [a for a in new if a not in keep]
 
     # ------------------------------------------------------------ pan mode
     @app.callback(Output("drag", "data"), Output("pan-mode", "className"),
@@ -1008,6 +1095,32 @@ def init_tagger(server):
             title += f"  ·  {n_win} window(s) not tagged yet"
         idx = [i for i, r in enumerate(rows_) if r["id"] == sel]
         return rows_, idx, table_columns(rows_, bool(allf)), title
+
+    # keep the selected row visible in the scrolling table (Prev/Next event, Edit mode, clicks on the plot)
+    app.clientside_callback(
+        """function (selected) {
+            setTimeout(function () {
+                const box = document.getElementById('table');
+                const inp = box && box.querySelector('td.dash-select-cell input:checked');
+                const tr = inp && inp.closest('tr');
+                if (!tr) return;
+                const scroller = (function (el) {
+                    while (el && el !== box) {
+                        const s = getComputedStyle(el);
+                        if ((s.overflowY === 'scroll' || s.overflowY === 'auto') && el.scrollHeight > el.clientHeight)
+                            return el;
+                        el = el.parentElement;
+                    }
+                    return null;
+                })(tr.parentElement);
+                if (!scroller) return;
+                const r = tr.getBoundingClientRect(), b = scroller.getBoundingClientRect();
+                if (r.top < b.top || r.bottom > b.bottom)
+                    scroller.scrollTop += (r.top - b.top) - scroller.clientHeight / 3;
+            }, 80);
+            return null;
+        }""",
+        Output("table-scroll", "data"), Input("table", "selected_rows"), prevent_initial_call=True)
 
     # ------------------------------------------------------------ helpers for writes
     def _guard(ctx):

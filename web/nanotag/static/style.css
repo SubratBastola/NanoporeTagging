@@ -35,6 +35,8 @@ button:disabled { opacity: .5; cursor: default; }
 .badge.error, .badge.missing { background:#fee2e2; color:#991b1b; }
 .badge.running, .badge.ingesting { background:#dbeafe; color:#1e40af; }
 .badge.queued, .badge.pending { background:#f3f4f6; color:#374151; }
+.badge.cancelling { background:#ffedd5; color:#9a3412; }
+.badge.cancelled { background:#f3f4f6; color:#6b7280; text-decoration: line-through; }
 .badge.locked { background:#fef3c7; color:#92400e; }
 .bar { height:6px; background:#e5e7eb; border-radius:3px; overflow:hidden; width:120px; display:inline-block; vertical-align:middle; }
 .bar > i { display:block; height:100%; background:var(--accent); }

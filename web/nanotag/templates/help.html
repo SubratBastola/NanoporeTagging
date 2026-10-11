@@ -25,10 +25,13 @@
     <tr><td>Run clustering / see the report</td><td>Experiment → <b>📊 Run clustering</b> → Results → <b>📈 HTML report</b></td></tr>
     <tr><td>Download CSV / XLSX / NN <code>__predicted.xlsx</code></td><td>Experiment → <b>⬇ Export</b> tab (also in the Tagger: “Export this recording”)</td></tr>
     <tr><td>Watch progress of uploads, NN, clustering</td><td><a href="{{ url_for('jobs_page') }}">⏱ Jobs</a>, or the experiment's Jobs tab</td></tr>
+    <tr><td>Stop a job started by mistake (e.g. a second clustering run)</td><td><b>⏹ Stop</b> on its row in <a href="{{ url_for('jobs_page') }}">⏱ Jobs</a>, the experiment's Jobs tab or the clustering results; queued jobs: <b>Cancel</b>. Partial results are removed.</td></tr>
+    <tr><td>Pan in the Tagger without leaving Add Event / Window / Delete</td><td>Hold the <b>middle mouse button</b> and drag (or ✋ Pan at the top)</td></tr>
     <tr><td>Add users, reset passwords</td><td>{% if current_user.is_admin %}<a href="{{ url_for('admin') }}">⚙ Admin</a>{% else %}⚙ Admin (admins only){% endif %} · change your own password: <a href="{{ url_for('account') }}">👤 {{ current_user.username }}</a></td></tr>
     <tr><td>Lock a set / restrict an experiment</td><td>Annotations tab (🔒 Lock) · experiment → ⚙ Settings &amp; access (admins)</td></tr>
     <tr><td>Upload another NN checkpoint</td><td><a href="{{ url_for('models_page') }}">🧠 Models</a> (admins)</td></tr>
     <tr><td>Move an experiment to another server</td><td>Experiment → ⬇ Export → Bundle; then Experiments → 📦 Import bundle</td></tr>
+    <tr><td>Move the whole server (users, all experiments, settings)</td><td>{% if current_user.is_admin %}<a href="{{ url_for('admin') }}#export-site">⚙ Admin → 📦 Export data and configuration</a>{% else %}⚙ Admin → 📦 Export data and configuration (admins){% endif %}; on the new server <code>sudo ./deploy/migrate-from.sh bundle.tar</code> or <code>sudo ./deploy/migrate-from.sh you@oldserver</code></td></tr>
   </table>
 </div>
 <div class="card">

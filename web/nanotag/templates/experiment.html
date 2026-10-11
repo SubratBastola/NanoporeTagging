@@ -282,7 +282,10 @@
       <td>{% if r.can_delete %}<input type="checkbox" name="run_ids" value="{{ r.id }}" form="rundel">{% endif %}</td>
       <td><b>{{ r.name }}</b><div class="muted small">{{ fmt_ts(r.created_at) }}</div></td>
       <td class="small">{{ r.set_names }}</td>
-      <td><span class="badge {{ r.status }}">{{ r.status }}</span>{% if r.job_id %} <a class="small" href="{{ url_for('job_page', job_id=r.job_id) }}">log</a>{% endif %}</td>
+      <td><span class="badge {{ r.status }}">{{ r.status }}</span>{% if r.job_id %} <a class="small" href="{{ url_for('job_page', job_id=r.job_id) }}">log</a>{% endif %}
+        {% if r.job_id and r.status in ['queued', 'running'] and (current_user.is_admin or r.created_by == current_user.username) %}
+        <form method="post" action="{{ url_for('job_cancel', job_id=r.job_id) }}" style="display:inline"
+              onsubmit="return confirm('Stop clustering run “{{ r.name }}”?')"><button class="small danger">⏹ Stop</button></form>{% endif %}</td>
       <td>{{ r.final_k or '' }}</td><td>{{ r.k_bic or '' }}</td><td>{{ r.n_events or '' }}</td>
       <td class="small">{{ r.created_by }}</td>
       <td class="small">{% if r.status == 'done' %}
@@ -341,14 +344,18 @@
     <input type="hidden" name="experiment_id" value="{{ exp.id }}">
     <button class="small">🧹 Clear finished jobs from the list</button></form>
   <table class="t" id="jobs-table">
-    <tr><th>#</th><th>Kind</th><th>Status</th><th>Progress</th><th>Message</th><th>By</th><th>Queued</th></tr>
+    <tr><th>#</th><th>Kind</th><th>Status</th><th>Progress</th><th>Message</th><th>By</th><th>Queued</th><th></th></tr>
     {% for j in jobs_list %}
     <tr data-job="{{ j.id }}"><td><a href="{{ url_for('job_page', job_id=j.id) }}">{{ j.id }}</a></td><td>{{ j.kind }}</td>
       <td><span class="badge {{ j.status }}" data-st>{{ j.status }}</span></td>
       <td><span class="bar"><i data-bar style="width:{{ (100*(j.progress or 0))|round(1) }}%"></i></span></td>
       <td class="small" data-msg>{{ j.message }}</td><td class="small">{{ j.created_by }}</td>
-      <td class="small">{{ fmt_ts(j.created_at) }}</td></tr>
-    {% else %}<tr><td colspan="7" class="muted">No jobs yet.</td></tr>{% endfor %}
+      <td class="small">{{ fmt_ts(j.created_at) }}</td>
+      <td data-stop>{% if j.status in ['queued', 'running'] and (current_user.is_admin or j.created_by == current_user.username) %}
+        <form method="post" action="{{ url_for('job_cancel', job_id=j.id) }}"
+              onsubmit="return confirm('{{ 'Stop' if j.status == 'running' else 'Cancel' }} job #{{ j.id }} ({{ j.kind }})?{{ ' Its partial results are removed.' if j.status == 'running' else '' }}')">
+          <button class="small {{ 'danger' if j.status == 'running' else '' }}">{{ '⏹ Stop' if j.status == 'running' else 'Cancel' }}</button></form>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="8" class="muted">No jobs yet.</td></tr>{% endfor %}
   </table>
 </div>
 </section>
@@ -443,12 +450,14 @@ async function refreshJobs() {
     let active = false, changedRec = false;
     for (const j of d.jobs) {
       const row = document.querySelector(`tr[data-job="${j.id}"]`);
-      if (!row) { if (j.status === 'queued' || j.status === 'running') active = true; continue; }
+      if (!row) { if (j.status === 'queued' || j.status === 'running' || j.status === 'cancelling') active = true; continue; }
       const st = row.querySelector('[data-st]');
       if (st.textContent !== j.status) { st.textContent = j.status; st.className = 'badge ' + j.status; if (j.status === 'done') changedRec = true; }
       row.querySelector('[data-bar]').style.width = (100 * (j.progress || 0)).toFixed(1) + '%';
       row.querySelector('[data-msg]').textContent = j.message || '';
-      if (j.status === 'queued' || j.status === 'running') active = true;
+      const stopCell = row.querySelector('[data-stop]');
+      if (stopCell && j.status !== 'queued' && j.status !== 'running') stopCell.innerHTML = '';
+      if (j.status === 'queued' || j.status === 'running' || j.status === 'cancelling') active = true;
     }
     for (const rc of d.recordings) {
       const row = document.querySelector(`tr[data-rec="${rc.id}"] [data-status]`);

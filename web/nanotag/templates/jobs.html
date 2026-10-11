@@ -14,9 +14,12 @@
       <td><span class="bar"><i style="width:{{ (100*(j.progress or 0))|round(1) }}%"></i></span></td>
       <td class="small">{{ j.message }}</td><td class="small">{{ j.created_by }}</td>
       <td class="small">{{ fmt_ts(j.created_at) }}</td><td class="small">{{ fmt_ts(j.finished_at) }}</td>
-      <td>{% if j.status == 'queued' %}<form method="post" action="{{ url_for('job_cancel', job_id=j.id) }}"><button>Cancel</button></form>{% endif %}</td></tr>
+      <td>{% if j.status in ['queued', 'running'] and (current_user.is_admin or j.created_by == current_user.username) %}
+        <form method="post" action="{{ url_for('job_cancel', job_id=j.id) }}"
+              {% if j.status == 'running' %}onsubmit="return confirm('Stop running job #{{ j.id }} ({{ j.kind }})? Its partial results are removed.')"{% endif %}>
+          <button class="{{ 'danger' if j.status == 'running' else '' }}">{{ '⏹ Stop' if j.status == 'running' else 'Cancel' }}</button></form>{% endif %}</td></tr>
     {% else %}<tr><td colspan="10" class="muted">No jobs.</td></tr>{% endfor %}
   </table>
 </div>
-<script>if ({{ 'true' if jobs_list|selectattr('status','in',['queued','running'])|list else 'false' }}) setTimeout(() => location.reload(), 5000);</script>
+<script>if ({{ 'true' if jobs_list|selectattr('status','in',['queued','running','cancelling'])|list else 'false' }}) setTimeout(() => location.reload(), 5000);</script>
 {% endblock %}

@@ -6,6 +6,10 @@
   <div class="row"><span class="bar" style="width:300px"><i id="bar" style="width:{{ (100*(j.progress or 0))|round(1) }}%"></i></span>
     <span id="msg">{{ j.message }}</span></div>
   <p class="small muted">Queued {{ fmt_ts(j.created_at) }} by {{ j.created_by }} · started {{ fmt_ts(j.started_at) }} · finished {{ fmt_ts(j.finished_at) }}</p>
+  {% if j.status in ['queued', 'running'] and (current_user.is_admin or j.created_by == current_user.username) %}
+  <form method="post" action="{{ url_for('job_cancel', job_id=j.id) }}" id="stopform"
+        onsubmit="return confirm('{{ 'Stop this running job? Its partial results are removed.' if j.status == 'running' else 'Cancel this queued job?' }}')">
+    <button class="danger">{{ '⏹ Stop job' if j.status == 'running' else 'Cancel job' }}</button></form>{% endif %}
   {% if j.experiment_id %}<p><a href="{{ url_for('experiment', exp_id=j.experiment_id) }}">← back to experiment</a></p>{% endif %}
   <details><summary>Parameters</summary><pre class="small">{{ params | tojson(indent=2) }}</pre></details>
   {% if result %}<details open><summary>Result</summary><pre class="small">{{ result | tojson(indent=2) }}</pre></details>{% endif %}
@@ -20,8 +24,9 @@ async function tick() {
   document.getElementById('bar').style.width = (100 * (d.progress || 0)).toFixed(1) + '%';
   const st = document.getElementById('st'); st.textContent = d.status; st.className = 'badge ' + d.status;
   const lg = document.getElementById('log'); lg.scrollTop = lg.scrollHeight;
-  if (d.status === 'queued' || d.status === 'running') setTimeout(tick, 2000);
+  if (d.status === 'queued' || d.status === 'running' || d.status === 'cancelling') setTimeout(tick, 2000);
+  else { const f = document.getElementById('stopform'); if (f) f.remove(); }
 }
-{% if j.status in ['queued', 'running'] %}setTimeout(tick, 1000);{% endif %}
+{% if j.status in ['queued', 'running', 'cancelling'] %}setTimeout(tick, 1000);{% endif %}
 </script>
 {% endblock %}

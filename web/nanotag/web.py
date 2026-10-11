@@ -5,6 +5,7 @@ import math
 import os
 import re
 import shutil
+import socket
 import threading
 import time
 import uuid
@@ -1157,9 +1158,23 @@ def _register_routes(app):
 
     @app.post("/jobs/<int:job_id>/cancel")
     def job_cancel(job_id):
+        """Cancel a queued job or stop a running one (its creator or an admin)."""
         j = jobs.get_job(job_id)
-        if j and (current_user.is_admin or j["created_by"] == current_user.username):
-            jobs.cancel_job(job_id)
+        if j is None:
+            abort(404)
+        if not (current_user.is_admin or j["created_by"] == current_user.username):
+            flash(f"Only {j['created_by']} or an administrator can stop job #{job_id}.", "error")
+            return back()
+        st = jobs.cancel_job(job_id, current_user.username)
+        if st == "cancelled":
+            flash(f"Job #{job_id} ({j['kind']}) cancelled before it started.", "ok")
+        elif st == "cancelling":
+            flash(f"Stopping job #{job_id} ({j['kind']}) — it will show as cancelled in a few seconds; "
+                  f"partial results are removed.", "ok")
+        else:
+            flash(f"Job #{job_id} is already {j['status']}.", "warn")
+        if request.headers.get("Accept", "").startswith("application/json"):
+            return jsonify({"status": st})
         return back()
 
     # ------------------------------------------------------------- models
@@ -1203,6 +1218,27 @@ def _register_routes(app):
         return render_template("admin.html", users=auth.list_users(),
                                disk={"total": du.total, "used": du.used, "free": du.free},
                                roots=[str(r) for r in c.IMPORT_ROOTS], cfg=c)
+
+    # ------------------------------------------------------------- whole-server export (move to another machine)
+    @app.get("/admin/export-site")
+    @admin_required
+    def admin_export_site():
+        """Download users, experiments, annotations + history, models, clustering outputs and settings as one
+        .tar (optionally with display data and ABFs). Import on the new server: deploy/migrate-from.sh FILE."""
+        from . import sitemove
+        zarr_ = request.args.get("zarr") == "1"
+        abf = request.args.get("abf") == "1"
+        name = f"nanotag-site-{_download_name(socket.gethostname())}-{time.strftime('%Y%m%d-%H%M')}.tar"
+        app.logger.info("site export by %s (zarr=%s abf=%s)", current_user.username, zarr_, abf)
+        return Response(stream_with_context(sitemove.export_site(zarr_, abf, current_user.username)),
+                        mimetype="application/x-tar",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    @app.get("/api/admin/site-summary")
+    @admin_required
+    def api_site_summary():
+        from . import sitemove
+        return jsonify(sitemove.site_summary())
 
     @app.post("/admin/users/add")
     @admin_required

@@ -49,11 +49,11 @@ the old ufw rule. `update.sh` alone keeps whatever port the env file already has
 
 ```bash
 # on your laptop
-scp nanotag-0.1.10.tar.gz oguz@ANIServer:~
+scp nanotag-0.1.11.tar.gz oguz@ANIServer:~
 
 # on ANIServer
-tar xzf nanotag-0.1.10.tar.gz
-cd nanotag-0.1.10
+tar xzf nanotag-0.1.11.tar.gz
+cd nanotag-0.1.11
 sudo ./deploy/install.sh --allow-all --import-root /home/oguz/NanoporeTagging
 ```
 
@@ -224,7 +224,11 @@ An annotation set is a named collection of events across all recordings of the e
   - If two people edit the same event, the second save is refused with "changed by X".
   - "Color markers by author" and the author filter show who tagged what.
   - The events table shows only columns that have values, so imported window lists show their
-    window start/end, and a **status** column says *window only*, *partial* or *tagged*.
+    window start/end, and a **status** column says *window only*, *partial* or *tagged*. It is one
+    scrolling list with a fixed header (no 25-row pages), so every event of the set — also in the
+    all-files view — can be reached; the selected event is kept in view.
+  - New authors appear in the author filter ("Show events by") as soon as they tag, so events added
+    to a set that had none yet are drawn at once. Authors you untick stay unticked.
   - **Show all files of the experiment** (tick box above the graph, off by default) lays every
     recording end to end, labelled by run and condition, with the table listing every file's events.
     Everything works there too — add events and windows, delete, drag guides, edit notes; each change
@@ -234,7 +238,9 @@ An annotation set is a named collection of events across all recordings of the e
     becomes a hand and a ✋ badge shows on the plot. Turning Pan on in Add Event, Add Window or Delete
     Events pauses that mode (the Mode box shows Zoom/Inspect); turning Pan off returns to it, and
     Add Event keeps the points already clicked, so you can pan to the next landmark mid-event.
-    Choosing a mode by hand while panning ends the pause. ◀ ▶ step half a
+    Choosing a mode by hand while panning ends the pause. **Middle mouse button:** hold it and drag
+    to pan in any mode; on release you are back in what you were doing (pending Add Event points are
+    kept). ◀ ▶ step half a
     window. **Thumbwheels** (IRIX style): the vertical wheel left of the plot zooms Y (pick the channel,
     or *all*, under it), the horizontal wheel below zooms X. Drag, or scroll over a wheel;
     double-click resets. **Toggle Side Panel** hides the event table to widen the plot.
@@ -261,6 +267,8 @@ This runs clustering.py's engine.
 **Conditions.** Tick DC, AC, AOM … to cluster only those recordings; tick "one run per ticked
 condition" to get a separate run (and report) for each.
 
+A run started by mistake can be stopped: **⏹ Stop** on its row (Clustering results or the Jobs tab).
+
 Outputs:
 
 - the interactive **HTML report**;
@@ -271,6 +279,15 @@ Outputs:
 
 **Experiment bundle** exports an experiment with its annotation sets and edit history, optionally
 including the ABFs. **Import bundle** on the Experiments page recreates it on any NanoTag server.
+
+### Stopping jobs
+
+Queued jobs can be **cancelled** and running ones **stopped** (⏹ Stop on the ⏱ Jobs page, the
+experiment's Jobs tab, the job's log page, or a clustering run's row). A running job's process and
+everything it started are ended within a few seconds and half-done results are removed: a stopped
+clustering run is marked *cancelled* without outputs, a stopped NN job leaves no partial set, a stopped
+ingest keeps the previous display data (or asks for Re-ingest). Files already copied by an import job
+stay. Only the person who started a job, or an admin, can stop it.
 
 ### Permissions
 
@@ -294,6 +311,8 @@ All users can see and edit everything. An admin can:
 | Backup now | `sudo nanotag-admin backup` (runs nightly at 02:30; kept 30 days in `/srv/nanotag/backups`) |
 | Allow a data folder | `sudo /opt/nanotag/current/deploy/add-import-root.sh /home/oguz/NanoporeTagging` |
 | Import a folder (terminal) | `sudo nanotag-admin import-folder DIR [--dry-run] [--all] [--mode copy]` |
+| Export everything (move server) | Admin page → **📦 Export data and configuration**, or `sudo nanotag-admin export-site [--with-zarr] [--with-abf]` |
+| Import from another server | `sudo ./deploy/migrate-from.sh you@oldserver [--with-abf]` or `sudo ./deploy/migrate-from.sh bundle.tar` |
 | Self-check | `sudo nanotag-admin check` |
 | Logs | `journalctl -u nanotag-web -f` · `journalctl -u nanotag-worker -f` |
 | Restart | `sudo systemctl restart nanotag-web nanotag-worker` |
@@ -308,6 +327,46 @@ Zarr. With 3.3 TB free that is roughly 100 experiments. The Admin page shows the
 - `/srv/nanotag/abf`, the raw data.
 
 The Zarr store can always be rebuilt with **Re-ingest**.
+
+### Moving NanoTag to another machine
+
+Everything people made on a server — **user accounts** (with their passwords), experiments,
+recordings, annotation sets, events and their edit history, NN models, clustering runs and outputs,
+and the server settings — goes into one *site bundle* (`.tar`).
+
+1. Install NanoTag on the new machine (`sudo ./deploy/install.sh ...`, as in section 1).
+2. Either let the new server fetch everything over SSH (resumable; best when ABFs come along):
+
+   ```bash
+   # on the NEW server, from the release folder
+   sudo ./deploy/migrate-from.sh oguz@ANIServer               # data + settings + display data
+   sudo ./deploy/migrate-from.sh oguz@ANIServer --with-abf    # ... and the ABF files
+   ```
+
+   You type your sudo password on the old server once (it writes the bundle). Bundle, display data
+   and ABFs are copied with rsync into a staging folder; if the copy is interrupted, run the same
+   command again and it resumes. Your SSH user must be in the old server's `nanotag` group (the
+   installer adds the installing user) and the old server must run 0.1.11 or later.
+
+   Or download the bundle from **Admin → 📦 Export data and configuration** (tick *display data* and,
+   if wanted, *ABF files*), copy it over, and run `sudo ./deploy/migrate-from.sh nanotag-site-….tar`.
+
+3. The script stops NanoTag on the new server, backs up its database, installs the bundle, rewrites
+   file paths for the new machine and starts NanoTag again. Users sign in with their old passwords.
+
+Details:
+
+- The new server keeps its own secret key, port and firewall rule. `--apply-config` also copies the
+  old worker/thread/display settings; all old settings are saved in `<data>/imported-config-*.env`.
+- Without display data, recordings whose ABF is there are re-ingested automatically; recordings with
+  neither are marked *missing* (import their ABFs again — the annotations are kept).
+- ABFs that were **used in place** (e.g. under `/home/oguz/NanoporeTagging`) keep their path if the
+  same folder exists on the new machine (copy it there and allow it with `add-import-root.sh`);
+  otherwise, with `--with-abf`, they are copied into NanoTag's ABF store. `--map OLD=NEW` rewrites a
+  path prefix if the folder lives elsewhere now.
+- A server that already has experiments or extra users is only replaced with `--force`. Jobs that
+  were queued or running on the old server are not carried over. The old server is not changed.
+- To merge single experiments into a server that is already in use, use experiment bundles instead.
 
 ---
 

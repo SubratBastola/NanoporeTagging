@@ -152,12 +152,12 @@ REQ="$REL/requirements.txt"
 /opt/nanotag/venv/bin/pip install -q -r "$REQ"
 
 # ---------------------------------------------------------------- running jobs
-RUNNING=$(sqlite3 "${NANOTAG_DATA}/db/nanotag.sqlite3" "SELECT COUNT(*) FROM jobs WHERE status='running'" 2>/dev/null || echo 0)
+RUNNING=$(sqlite3 "${NANOTAG_DATA}/db/nanotag.sqlite3" "SELECT COUNT(*) FROM jobs WHERE status IN ('running','cancelling')" 2>/dev/null || echo 0)
 if [[ "$RUNNING" -gt 0 ]]; then
   if [[ "$WAIT" -gt 0 ]]; then
     info "$RUNNING job(s) running; waiting up to $WAIT min ..."
     for i in $(seq 1 $((WAIT*6))); do
-      RUNNING=$(sqlite3 "${NANOTAG_DATA}/db/nanotag.sqlite3" "SELECT COUNT(*) FROM jobs WHERE status='running'")
+      RUNNING=$(sqlite3 "${NANOTAG_DATA}/db/nanotag.sqlite3" "SELECT COUNT(*) FROM jobs WHERE status IN ('running','cancelling')")
       [[ "$RUNNING" -eq 0 ]] && break
       sleep 10
     done

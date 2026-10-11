@@ -46,10 +46,89 @@ def list_jobs(experiment_id=None, limit=100):
                     (experiment_id, limit))
 
 
-def cancel_job(job_id):
+ACTIVE = ("queued", "running", "cancelling")      # job states that are not finished yet
+
+
+def cancel_job(job_id, user=None):
+    """Cancel a queued job, or ask the worker to stop a running one.
+
+    Queued jobs are cancelled at once. A running job is marked 'cancelling'; the worker sees that within a
+    second or two, kills the job's process (and anything it started), cleans up the partial results and marks
+    the job 'cancelled'. Returns the job's new status (or None if there was nothing to cancel)."""
+    who = f" by {user}" if user else ""
     with db() as con:
-        con.execute("UPDATE jobs SET status='cancelled', finished_at=? WHERE id=? AND status='queued'",
-                    (now(), job_id))
+        n = con.execute("UPDATE jobs SET status='cancelled', finished_at=?, message=? WHERE id=? AND status='queued'",
+                        (now(), f"cancelled{who} before it started", job_id)).rowcount
+        if n:
+            with_run = one(con, "SELECT kind, params_json FROM jobs WHERE id=?", (job_id,))
+            if with_run and with_run["kind"] == "cluster":
+                con.execute("UPDATE cluster_runs SET status='cancelled' WHERE id=? AND status IN ('queued','running')",
+                            (jload(with_run["params_json"], {}).get("run_id"),))
+            return "cancelled"
+        n = con.execute("UPDATE jobs SET status='cancelling', message=?, "
+                        "log=COALESCE(log,'') || ? WHERE id=? AND status='running'",
+                        (f"stopping (requested{who}) ...",
+                         f"[{time.strftime('%H:%M:%S')}] Stop requested{who}.\n", job_id)).rowcount
+        return "cancelling" if n else None
+
+
+def finish_cancel(job_id, note="stopped"):
+    """Called by the worker once a 'cancelling' job's process is gone: mark it cancelled and undo partial
+    results. Does nothing (returns False) if the job already finished on its own in the meantime."""
+    with db() as con:
+        n = con.execute("UPDATE jobs SET status='cancelled', finished_at=?, message=?, "
+                        "log=COALESCE(log,'') || ? WHERE id=? AND status='cancelling'",
+                        (now(), f"cancelled ({note})", f"[{time.strftime('%H:%M:%S')}] Job {note}.\n",
+                         job_id)).rowcount
+    if not n:
+        return False
+    job = get_job(job_id)
+    try:
+        _cleanup_cancelled(job, jload(job["params_json"], {}))
+    except Exception as e:  # noqa: BLE001  (cleanup is best effort; the job is cancelled either way)
+        with db() as con:
+            con.execute("UPDATE jobs SET log=COALESCE(log,'') || ? WHERE id=?",
+                        (f"cleanup after cancel failed: {type(e).__name__}: {e}\n", job_id))
+    return True
+
+
+def _cleanup_cancelled(job, params):
+    """Remove what a stopped job left half-done, so nothing incomplete looks like a real result."""
+    kind, notes = job["kind"], []
+    if kind == "cluster":
+        run_id = params.get("run_id")
+        with db() as con:
+            con.execute("UPDATE cluster_runs SET status='cancelled' WHERE id=?", (run_id,))
+            con.execute("DELETE FROM cluster_labels WHERE run_id=?", (run_id,))
+        out_dir = cfg().JOBS_DIR / f"cluster_run_{run_id}"
+        if out_dir.exists():
+            shutil.rmtree(out_dir, ignore_errors=True)
+        notes.append(f"clustering run {run_id} marked cancelled, partial outputs removed")
+    elif kind == "nn":
+        from .deletion import delete_set
+        with db() as con:
+            cand = rows(con, "SELECT id, name, source_json FROM annotation_sets WHERE kind='nn'")
+        for s in cand:
+            if (jload(s["source_json"], {}) or {}).get("job_id") == job["id"]:
+                delete_set(s["id"])
+                notes.append(f"partial NN set '{s['name']}' deleted")
+    elif kind == "ingest":
+        rid = params.get("recording_id")
+        with db() as con:
+            rec = one(con, "SELECT zarr_path FROM recordings WHERE id=?", (rid,))
+            if rec and rec["zarr_path"]:        # a re-ingest: the previous display data is still there
+                con.execute("UPDATE recordings SET status='ready', error=NULL WHERE id=?", (rid,))
+                notes.append("recording keeps its previous display data")
+            elif rec:
+                con.execute("UPDATE recordings SET status='error', error=? WHERE id=?",
+                            ("ingest stopped by user — use Re-ingest to try again", rid))
+                notes.append("recording marked as not ingested")
+    else:
+        notes.append("files already copied/registered before the stop are kept")
+    if notes:
+        with db() as con:
+            con.execute("UPDATE jobs SET log=COALESCE(log,'') || ? WHERE id=?",
+                        ("".join(f"  cleanup: {n}\n" for n in notes), job["id"]))
 
 
 class JobContext:
@@ -92,23 +171,29 @@ def run_job(job_id):
     ctx = JobContext(job_id)
     params = jload(job["params_json"], {})
     fn = JOB_FUNCS.get(job["kind"])
+    if fn is None and job["kind"] == "_test_sleep" and cfg().ALLOW_FAKE_ABF:
+        fn = job_test_sleep                       # test servers only (stop/kill tests)
     try:
         if fn is None:
             raise ValueError(f"Unknown job kind {job['kind']}")
         result = fn(params, ctx, job)
         ctx.progress(1.0)
         ctx.flush()
+        # (a job that finishes while a stop is pending counts as done: its results are complete)
         with db() as con:
             con.execute("UPDATE jobs SET status='done', progress=1, finished_at=?, result_json=?, "
-                        "message=COALESCE(NULLIF(message,''),'done') WHERE id=?",
+                        "message=CASE WHEN status='cancelling' OR COALESCE(message,'')='' THEN 'done' "
+                        "ELSE message END WHERE id=? AND status IN ('running','cancelling')",
                         (now(), jdump(result or {}), job_id))
     except Exception as e:
         ctx.log("ERROR: " + "".join(traceback.format_exception(e)))
         ctx.flush()
         with db() as con:
-            con.execute("UPDATE jobs SET status='error', finished_at=?, message=? WHERE id=?",
-                        (now(), f"{type(e).__name__}: {e}"[:500], job_id))
-        _on_job_failed(job, params, e)
+            n = con.execute("UPDATE jobs SET status='error', finished_at=?, message=? "
+                            "WHERE id=? AND status IN ('running','cancelling')",
+                            (now(), f"{type(e).__name__}: {e}"[:500], job_id)).rowcount
+        if n:
+            _on_job_failed(job, params, e)
 
 
 def _on_job_failed(job, params, err):
@@ -497,6 +582,20 @@ def job_import_bundle(params, ctx, job):
 def job_import_folder(params, ctx, job):
     from .folder_import import job_import_folder as f
     return f(params, ctx, job)
+
+
+def job_test_sleep(params, ctx, job):
+    """Test-only job (NANOTAG_ALLOW_FAKE_ABF=1): sleeps, with a child process, so stopping can be tested."""
+    import subprocess
+    child = subprocess.Popen(["sleep", str(int(params.get("seconds", 120)) + 60)])
+    ctx.log(f"child pid {child.pid}")
+    ctx.flush()
+    t_end = time.time() + float(params.get("seconds", 120))
+    while time.time() < t_end:
+        time.sleep(0.2)
+        ctx.progress(1 - (t_end - time.time()) / float(params.get("seconds", 120)))
+    child.kill()
+    return {"slept": params.get("seconds", 120)}
 
 
 JOB_FUNCS = {

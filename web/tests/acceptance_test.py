@@ -74,15 +74,15 @@ def main():
     deps = s.get(f"{B}/tagger/_dash-dependencies").json()
     load_out = next(d["output"] for d in deps if d["inputs"] == [{"id": "url", "property": "search"}])
     t0 = time.time()
-    resp = T.dash_call(s, load_out, [("url", "search", f"?rec={rid}&set={sid}")])
+    resp = T.dash_call(s, load_out, [("url", "search", f"?rec={rid}&set={sid}")], [("allfiles", "value", [])])
     ctx = resp["ctx"]["data"]
     render_dep = next(d for d in deps if d["output"].startswith("..graph.figure"))
     ins = {"events": resp["events"]["data"], "window": resp["window"]["data"], "nav": 0, "zoom": {},
            "click": {"stage": "idle"}, "vis": resp["vis"]["value"], "mode": "zoom", "sel": None, "opts": [],
-           "authors": None, "budget": 8000}
+           "authors": None, "budget": 8000, "drag": "zoom"}
+    rstate = {"ctx": ctx, "rev": resp["rev"]["data"], "allfiles": [], "panst": {"prev": None, "skip": None}}
     T.dash_call(s, render_dep["output"], [(i["id"], i["property"], ins[i["id"]]) for i in render_dep["inputs"]],
-                [(st["id"], st["property"], {"ctx": ctx, "rev": resp["rev"]["data"]}[st["id"]])
-                 for st in render_dep["state"]])
+                [(st["id"], st["property"], rstate[st["id"]]) for st in render_dep["state"]])
     print(f"tagger load + render ok ({time.time() - t0:.2f} s)")
 
     model_id = info["models"][0]["id"]

@@ -12,12 +12,20 @@
     nanotag-admin import-folder DIR [--mode inplace|copy|link|move] [--all] [--recursive] [--set-name N]
                                 [--user NAME] [--dry-run]
                                                     import every ABF + its _event.csv (like the web page)
+    nanotag-admin export-site [--out FILE] [--with-zarr] [--with-abf]
+                                                    everything needed to move this server: users, experiments,
+                                                    annotations + history, models, clustering outputs, settings
+    nanotag-admin import-site BUNDLE|STAGING_DIR [--force] [--map OLD=NEW]
+                                                    install a site bundle here (REPLACES this server's data; stop
+                                                    the services first — deploy/migrate-from.sh does it all)
+    nanotag-admin site-summary                      what an export would contain
     nanotag-admin check                             self-test used by install/update scripts
 """
 import argparse
 import getpass
 import hashlib
 import shutil
+import socket
 import sqlite3
 import sys
 import time
@@ -158,6 +166,56 @@ def cmd_import_folder(args):
         print(f"Queued import job #{jid}: {n} recording(s) -> experiment #{exp_id}")
 
 
+def cmd_export_site(args):
+    from . import sitemove
+    c = cfg()
+    c.ensure_dirs()
+    migrate()
+    out = Path(args.out) if args.out else (
+        c.DATA / "exports" / f"nanotag-site-{socket.gethostname()}-{time.strftime('%Y%m%d-%H%M%S')}.tar")
+    if args.out and not out.is_absolute():
+        out = c.DATA / "exports" / out
+    print(f"Exporting NanoTag {c.VERSION} data + configuration"
+          + (" + display data" if args.with_zarr else "") + (" + ABFs" if args.with_abf else ""))
+    sitemove.export_site_to_file(out, include_zarr=args.with_zarr, include_abf=args.with_abf, user="cli")
+    try:
+        out.chmod(0o640)
+    except OSError:
+        pass
+    print(f"BUNDLE={out}")
+
+
+def cmd_import_site(args):
+    from . import sitemove
+    maps = []
+    for m in args.map or []:
+        if "=" not in m:
+            sys.exit(f"--map needs OLD=NEW, got {m!r}")
+        a, b = m.split("=", 1)
+        maps.append((a, b))
+    rep = sitemove.import_site(args.source, force=args.force, keep_inplace=not args.copy_inplace, path_map=maps)
+    print(f"\nImported {rep['users']} user(s) and {rep['experiments']} experiment(s).")
+    if rep.get("backup"):
+        print(f"Previous database: {rep['backup']}")
+    if rep.get("portable_config"):
+        print("Old server settings worth keeping (migrate-from.sh --apply-config copies them):")
+        for k, v in rep["portable_config"].items():
+            print(f"  {k}={v}")
+    print(f"All old settings saved in {rep['config_file']}")
+    for w in rep["warnings"]:
+        print(f"NOTE: {w}")
+
+
+def cmd_site_summary(args):
+    from . import sitemove
+    migrate()
+    s = sitemove.site_summary()
+    print("Contents:", ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in s["counts"].items()))
+    for k, v in s["bytes"].items():
+        print(f"  {k:16s} {v / 1e9:10.3f} GB")
+    print(f"  ABFs used in place (outside the data folder): {s['inplace_abf']}")
+
+
 def cmd_check(args):
     c = cfg()
     ok = True
@@ -213,6 +271,19 @@ def main(argv=None):
     p.add_argument("--default", action="store_true"); p.set_defaults(fn=cmd_register_model)
     p = sp.add_parser("backup"); p.add_argument("--keep-days", type=int, default=14); p.set_defaults(fn=cmd_backup)
     sp.add_parser("check").set_defaults(fn=cmd_check)
+    p = sp.add_parser("export-site", help="export users, experiments, annotations, models, outputs and settings")
+    p.add_argument("--out", help="bundle file (default <data>/exports/nanotag-site-<host>-<time>.tar)")
+    p.add_argument("--with-zarr", action="store_true", help="include display data (no re-ingest needed)")
+    p.add_argument("--with-abf", action="store_true", help="include the ABF files and pending uploads")
+    p.set_defaults(fn=cmd_export_site)
+    p = sp.add_parser("import-site", help="install a site bundle (replaces this server's data)")
+    p.add_argument("source", help="bundle .tar, or a staging folder prepared by migrate-from.sh")
+    p.add_argument("--force", action="store_true", help="replace a server that already has data")
+    p.add_argument("--map", action="append", metavar="OLD=NEW", help="rewrite ABF path prefix (repeatable)")
+    p.add_argument("--copy-inplace", action="store_true",
+                   help="use the bundled copies of in-place ABFs even if the same path exists here")
+    p.set_defaults(fn=cmd_import_site)
+    sp.add_parser("site-summary").set_defaults(fn=cmd_site_summary)
     p = sp.add_parser("import-folder"); p.add_argument("dir")
     p.add_argument("--mode", choices=["inplace", "copy", "link", "move"], default="inplace")
     p.add_argument("--all", action="store_true", help="also ABFs without an event file (e.g. baseline)")

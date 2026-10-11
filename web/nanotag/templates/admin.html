@@ -36,6 +36,44 @@
   <p class="muted small">Users can view and edit every experiment and annotation set unless you restrict an
     experiment (on its page) or lock a set. Every edit records who made it.</p>
 </div>
+<div class="card" id="export-site">
+  <h2 style="margin-top:0">📦 Export data and configuration</h2>
+  <p class="small">One <code>.tar</code> file with everything people made on this server, for moving NanoTag to another
+    machine: <b>user accounts</b> (with their passwords), experiments, recordings, annotation sets, events and their
+    edit history, NN models, clustering runs and outputs, and the server settings.</p>
+  <div id="site-sum" class="small muted">Working out sizes …</div>
+  <form method="get" action="{{ url_for('admin_export_site') }}" class="row" style="margin-top:8px"
+        onsubmit="return siteExportGo(this)">
+    <label><input type="checkbox" name="zarr" value="1" checked> include display data
+      <span class="muted small" id="sz-zarr"></span> — the new server can tag at once instead of re-ingesting</label>
+    <label><input type="checkbox" name="abf" value="1"> include ABF files <span class="muted small" id="sz-abf"></span></label>
+    <button class="primary">⬇ Download export</button>
+  </form>
+  <p class="small">On the new server (after <code>deploy/install.sh</code>), import it with
+    <code>sudo ./deploy/migrate-from.sh nanotag-site-….tar</code>, or let the script fetch everything itself
+    straight from this server over SSH (resumable; best for ABFs):</p>
+  <pre class="cmd">sudo ./deploy/migrate-from.sh you@{{ request.host.split(':')[0] }} --with-abf</pre>
+  <p class="muted small">The import replaces the new server's (empty) data, keeps its own secret key and port, and backs up
+    whatever database it had. Command line here: <code>sudo nanotag-admin export-site --with-zarr</code>.</p>
+</div>
+<script>
+function gb(b) { return b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : (b / 1e6).toFixed(0) + ' MB'; }
+fetch('/api/admin/site-summary').then(r => r.json()).then(d => {
+  const c = d.counts, b = d.bytes;
+  document.getElementById('site-sum').textContent =
+    `${c.users} users · ${c.experiments} experiments · ${c.recordings} recordings · ${c.annotation_sets} annotation sets · ` +
+    `${c.events} events · ${c.cluster_runs} clustering runs · ${c.models} models — always included: ` +
+    gb(b.database + b.models + b.cluster_outputs);
+  document.getElementById('sz-zarr').textContent = '(' + gb(b.zarr) + ')';
+  document.getElementById('sz-abf').textContent = '(' + gb(b.abf + b.incoming) +
+    (d.inplace_abf ? `, incl. ${d.inplace_abf} used in place` : '') + ')';
+}).catch(() => { document.getElementById('site-sum').textContent = ''; });
+function siteExportGo(f) {
+  if (f.abf.checked && !confirm('Including the ABFs makes a very large download (see the size). ' +
+      'For big servers the SSH script is faster and can resume. Continue?')) return false;
+  return true;
+}
+</script>
 <div class="card">
   <h2 style="margin-top:0">Server</h2>
   <table class="t">
