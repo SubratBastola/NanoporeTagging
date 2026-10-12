@@ -184,10 +184,12 @@ def test_tagger(srv, s, exp_id, rid):
                     return f
         return None
     tp = find(lay, "table")["props"]
-    assert tp["page_size"] >= 2000 and tp["fixed_rows"] == {"headers": True}, tp.get("page_size")
-    assert tp["style_table"]["overflowY"] == "scroll", tp["style_table"]
-    assert "nt-mpan" in ok(s.get(f"{srv.base}/tagger/?rec={rid}&set={sid}"), "tagger page").text  # middle-button pan
-    print("  table: one scrolling list (page size", tp["page_size"], "), fixed header; middle-button pan script present")
+    # 0.1.12: the 0.1.10 table (68vh, scrolls) with one long page; no fixed header (it made pages reload in a loop)
+    assert tp["page_size"] >= 2000 and "fixed_rows" not in tp, tp.get("page_size")
+    assert tp["style_table"] == {"height": "68vh", "overflowY": "auto", "overflowX": "auto"}, tp["style_table"]
+    page = ok(s.get(f"{srv.base}/tagger/?rec={rid}&set={sid}"), "tagger page").text
+    assert "nt-mpan" in page and "/api/client-log" in page        # middle-button pan + browser error reporting
+    print("  table: one scrolling list (page size", tp["page_size"], "); middle-button pan and error reporting present")
 
     load = next(d for d in deps if d["inputs"] == [{"id": "url", "property": "search"}])
     resp = srv.dash(s, load["output"], [("url", "search", f"?rec={rid}&set={sid}")], [("allfiles", "value", [])])
@@ -198,7 +200,7 @@ def test_tagger(srv, s, exp_id, rid):
     render = next(d for d in deps if d["output"].startswith("..graph.figure"))
     ins = {"events": events, "window": window, "nav": 0, "zoom": {}, "click": {"stage": "idle"}, "vis": [2, 3, 0],
            "mode": "zoom", "sel": None, "opts": [], "authors": [], "budget": 2000, "drag": "zoom"}
-    st = {"ctx": ctx, "rev": resp["rev"]["data"], "allfiles": [], "panst": {"prev": None, "skip": None}}
+    st = {"ctx": ctx, "rev": resp["rev"]["data"], "allfiles": [], "panst": {"prev": None, "skip": None}, "authors": None}
     fig = srv.dash(s, render["output"], [(i["id"], i["property"], ins[i["id"]]) for i in render["inputs"]],
                    [(x["id"], x["property"], st[x["id"]]) for x in render["state"]])
     tmap = fig["tmap"]["data"]
@@ -211,25 +213,23 @@ def test_tagger(srv, s, exp_id, rid):
     assert len(events) == 1, events
 
     # before the fix the author filter stayed [] here and the new window was not drawn
-    sync = next(d for d in deps if d["inputs"] == [{"id": "events", "property": "data"}]
-                and "authors.value" in d["output"])
-
-    def sync_call(evs, options, value):
-        sv = {("ctx", "data"): ctx, ("authors", "options"): options, ("authors", "value"): value}
-        return srv.dash(s, sync["output"], [("events", "data", evs)],
-                        [(x["id"], x["property"], sv[(x["id"], x["property"])]) for x in sync["state"]])
-    sres = sync_call(events, [], [])
-    assert sres["authors"]["value"] == ["admin"], sres
-    fig = srv.dash(s, render["output"],
-                   [(i["id"], i["property"], dict(ins, events=events, authors=sres["authors"]["value"])[i["id"]])
-                    for i in render["inputs"]],
-                   [(x["id"], x["property"], st[x["id"]]) for x in render["state"]])
-    rects = [sh for sh in fig["graph"]["figure"]["layout"].get("shapes", []) if sh.get("type") == "rect"]
-    assert len(rects) == 1, rects
-    # an author the user unticked stays unticked when someone else adds an event
-    sres2 = sync_call(events, [{"label": "zed", "value": "zed"}, {"label": "admin", "value": "admin"}], ["zed"])
-    # 'zed' no longer has events and 'admin' was known (unticked by the user): admin stays unticked
-    assert sres2["authors"]["value"] == [], sres2
+    def draw(authors_value, authors_options):
+        stv = dict(st, authors=authors_options)
+        f = srv.dash(s, render["output"],
+                     [(i["id"], i["property"], dict(ins, events=events, authors=authors_value)[i["id"]])
+                      for i in render["inputs"]],
+                     [(x["id"], x["property"], stv[x["id"]]) for x in render["state"]])
+        return [sh for sh in f["graph"]["figure"]["layout"].get("shapes", []) if sh.get("type") == "rect"]
+    assert len(draw([], [])) == 1, "a new author's event must be drawn at once"
+    assert len(draw([], [{"label": "admin", "value": "admin"}])) == 0, "an author the user unticked stays hidden"
+    assert len(draw(["admin"], [{"label": "admin", "value": "admin"}])) == 1
+    # the 10-s check adds new authors to the list already ticked; unticked ones stay unticked
+    poll = next(d for d in deps if d["inputs"] == [{"id": "poll", "property": "n_intervals"}])
+    pv = {("ctx", "data"): ctx, ("rev", "data"): -1, ("authors", "options"): [{"label": "zed", "value": "zed"}],
+          ("authors", "value"): []}
+    pr = srv.dash(s, poll["output"], [("poll", "n_intervals", 3)],
+                  [(x["id"], x["property"], pv[(x["id"], x["property"])]) for x in poll["state"]])
+    assert pr["authors"]["value"] == ["admin"] and [o["value"] for o in pr["authors"]["options"]] == ["admin"], pr
     print("  new events on an empty set are drawn at once (author filter follows new authors)")
 
 

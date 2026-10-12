@@ -191,7 +191,7 @@ def run_checks(tmp):
              "drag": "data"}
     rr = dash_call(s, render_dep["output"], [(i["id"], i["property"], ins[i["id"]]) for i in render_dep["inputs"]],
                    [(st["id"], st["property"], {"ctx": ctx, "rev": resp["rev"]["data"], "allfiles": [],
-                                                         "panst": {"prev": None, "skip": None}}[st["id"]])
+                                                         "panst": {"prev": None, "skip": None}, "authors": None}[st["id"]])
                     for st in render_dep["state"]])
     fig = rr["graph"]["figure"]
     tmap = rr["tmap"]["data"]
@@ -227,7 +227,7 @@ def run_checks(tmp):
     tr_on = dash_call(s, tog["output"], [("allfiles", "value", ["on"])],
                       [(st["id"], st["property"], tst[st["id"]]) for st in tog["state"]])
     gwin = tr_on["window"]["data"]
-    rstate = {"ctx": ctx, "rev": resp["rev"]["data"], "allfiles": ["on"], "panst": {"prev": None, "skip": None}}
+    rstate = {"ctx": ctx, "rev": resp["rev"]["data"], "allfiles": ["on"], "panst": {"prev": None, "skip": None}, "authors": None}
     ra = dash_call(s, render_dep["output"], [(i["id"], i["property"], dict(ins, window=gwin)[i["id"]])
                                              for i in render_dep["inputs"]],
                    [(st["id"], st["property"], rstate[st["id"]]) for st in render_dep["state"]])
@@ -328,7 +328,7 @@ def run_checks(tmp):
     ins_p = dict(ins, mode="zoom", click=pend, drag="pan")
     rr = dash_call(s, render_dep["output"], [(i["id"], i["property"], ins_p[i["id"]]) for i in render_dep["inputs"]],
                    [(st["id"], st["property"], {"ctx": ctx, "rev": resp["rev"]["data"], "allfiles": [],
-                                                "panst": {"prev": "add", "skip": None}}[st["id"]])
+                                                "panst": {"prev": "add", "skip": None}, "authors": None}[st["id"]])
                     for st in render_dep["state"]])
     lay = rr["graph"]["figure"]["layout"]
     assert lay["dragmode"] == "pan", lay["dragmode"]

@@ -80,7 +80,7 @@ def main():
     ins = {"events": resp["events"]["data"], "window": resp["window"]["data"], "nav": 0, "zoom": {},
            "click": {"stage": "idle"}, "vis": resp["vis"]["value"], "mode": "zoom", "sel": None, "opts": [],
            "authors": None, "budget": 8000, "drag": "zoom"}
-    rstate = {"ctx": ctx, "rev": resp["rev"]["data"], "allfiles": [], "panst": {"prev": None, "skip": None}}
+    rstate = {"ctx": ctx, "rev": resp["rev"]["data"], "allfiles": [], "panst": {"prev": None, "skip": None}, "authors": None}
     T.dash_call(s, render_dep["output"], [(i["id"], i["property"], ins[i["id"]]) for i in render_dep["inputs"]],
                 [(st["id"], st["property"], rstate[st["id"]]) for st in render_dep["state"]])
     print(f"tagger load + render ok ({time.time() - t0:.2f} s)")

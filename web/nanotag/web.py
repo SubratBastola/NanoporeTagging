@@ -310,6 +310,16 @@ def _register_routes(app):
                 out.append({"file": n, "experiment": g, "exists": bool(ex), "experiment_id": ex["id"] if ex else None})
         return jsonify(out)
 
+    @app.post("/api/client-log")
+    def api_client_log():
+        """Browser errors from the Tagger page, written to the server log for diagnosis."""
+        d = request.get_json(force=True, silent=True) or {}
+        app.logger.warning("browser %s [%s] %s (dpr %s, %sx%s, %s): %s",
+                           str(d.get("kind"))[:20], current_user.username, str(d.get("page"))[:200],
+                           str(d.get("dpr"))[:8], str(d.get("w"))[:6], str(d.get("h"))[:6],
+                           str(d.get("ua"))[:160], str(d.get("msg"))[:2000])
+        return "", 204
+
     @app.get("/healthz")
     def healthz():
         with db() as con:

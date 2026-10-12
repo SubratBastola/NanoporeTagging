@@ -54,7 +54,7 @@ TABLE_COLS = ["event_id", "file", "status", "window_start", "window_end", "event
               "updated_by"]
 ALWAYS_COLS = {"event_id", "status", "notes"}
 EDITABLE_COLS = {"notes"}
-TABLE_PAGE = 2000       # rows per table page; sets up to this size scroll as one list
+TABLE_PAGE = 5000       # rows per table page: sets up to this size are one scrolling list
 
 
 # Pan pauses the modes that need a click or drag of their own; turning Pan off restores the mode.
@@ -276,7 +276,7 @@ def read_concat(segs, ch, t0, t1, budget):
 
 # ----------------------------------------------------------------- figure
 def build_figure(ctx, segs, events, window, zoom, click, visible, mode, sel, long_labels, authors_on,
-                 color_by_author, budget, allf=False, drag="zoom", paused=None):
+                 color_by_author, budget, allf=False, drag="zoom", paused=None, authors_listed=None):
     order = channel_order(ctx, visible)
     if not order:
         order = [ctx["roles"]["opt"]]
@@ -315,7 +315,10 @@ def build_figure(ctx, segs, events, window, zoom, click, visible, mode, sel, lon
     # ---- event markers (grouped per axis/author for speed) ----
     authors = sorted({e.get("created_by") or "?" for e in events})
     color_of = {a: AUTHOR_COLORS[i % len(AUTHOR_COLORS)] for i, a in enumerate(authors)}
-    shown = [e for e in events if (authors_on is None or (e.get("created_by") or "?") in authors_on)]
+    # "Show events by" hides only authors the user has unticked. An author not in the list yet (the first
+    # event of an empty set, or a colleague who just started tagging) is always shown.
+    hidden = set(authors_listed or []) - set(authors_on or []) if authors_on is not None else set()
+    shown = [e for e in events if (e.get("created_by") or "?") not in hidden]
     groups = {}
     for e in shown:
         key = (e.get("created_by") or "?") if color_by_author else "_all"
@@ -610,6 +613,30 @@ body.nt-mpan #pan-badge { display: block; }
 </style>
 <script>
 (function () {
+  // Browser errors are sent to the server log (journalctl -u nanotag-web), at most 20 per page, so a Tagger
+  // problem can be diagnosed without opening the browser's developer tools.
+  let nReported = 0;
+  function report(kind, msg) {
+    if (nReported >= 20) return;
+    nReported++;
+    try {
+      const body = JSON.stringify({kind: kind, msg: String(msg).slice(0, 2000), page: location.pathname + location.search,
+                                   ua: navigator.userAgent, dpr: window.devicePixelRatio,
+                                   w: window.innerWidth, h: window.innerHeight});
+      navigator.sendBeacon ? navigator.sendBeacon('/api/client-log', new Blob([body], {type: 'application/json'}))
+                           : fetch('/api/client-log', {method: 'POST', body: body,
+                                                       headers: {'Content-Type': 'application/json'}});
+    } catch (e) { /* never let reporting break the page */ }
+  }
+  window.addEventListener('error', e => report('error', (e.message || '') + ' @ ' + (e.filename || '') + ':' +
+                                                (e.lineno || '') + (e.error && e.error.stack ? '\\n' + e.error.stack : '')));
+  window.addEventListener('unhandledrejection', e => report('promise', e.reason && (e.reason.stack || e.reason)));
+  const cerr = console.error;
+  console.error = function () {
+    try { report('console', Array.from(arguments).map(a => (a && a.stack) || String(a)).join(' ')); } catch (e) {}
+    return cerr.apply(console, arguments);
+  };
+
   const f = window.fetch;
   window.fetch = function () {
     return f.apply(this, arguments).then(function (r) {
@@ -754,6 +781,28 @@ body.nt-mpan #pan-badge { display: block; }
 </script>"""
 
 
+# ----------------------------------------------------------------- diagnostics
+_LOADS = {}
+
+
+def _note_load(search):
+    """Log a warning if one user's Tagger keeps reloading the same view (it should load once per page)."""
+    try:
+        key = (current_user.username, search or "")
+    except Exception:  # noqa: BLE001
+        return
+    t = time.time()
+    hist = [x for x in _LOADS.get(key, []) if t - x < 20.0] + [t]
+    _LOADS[key] = hist
+    if len(hist) == 4:              # once per burst (per web worker)
+        from flask import current_app
+        current_app.logger.warning(
+            "tagger: page for %s %s loaded %d times in %.0f s — the browser is re-loading it in a loop",
+            key[0], key[1], len(hist), t - hist[0])
+    if len(_LOADS) > 500:
+        _LOADS.clear()
+
+
 # ----------------------------------------------------------------- app
 def init_tagger(server):
     app = Dash(__name__, server=server, url_base_pathname="/tagger/", title=f"Tagger · NanoTag v{cfg().VERSION}",
@@ -885,22 +934,20 @@ def init_tagger(server):
             ], style={"flex": "1 1 auto", "minWidth": "600px"}),
             html.Div([
                 html.Div("Events", id="table-title", style={"fontWeight": 600}),
-                # Every event in one scrolling list (no 25-row pages): the header stays put and the body
-                # scrolls, so all events of a set — also in the all-files view — can be reached. Pages of
-                # TABLE_PAGE rows only kick in for very large NN sets, to keep the browser responsive.
+                # Same table as 0.1.10 (scrolls inside 68vh) but one long list instead of 25-row pages, so the
+                # scrollbar reaches every event of the set, also in the all-files view. (0.1.11 also had a fixed
+                # header and an auto-scroll script; those made the Tagger reload in a loop in some browsers.)
                 dash_table.DataTable(
                     id="table", columns=table_columns([]),
-                    data=[], row_selectable="single", page_action="native", page_size=TABLE_PAGE,
-                    sort_action="native", filter_action="native", fixed_rows={"headers": True},
-                    style_table={"height": "calc(100vh - 150px)", "minHeight": "320px", "overflowY": "scroll",
-                                 "overflowX": "auto"},
+                    data=[], row_selectable="single", page_size=TABLE_PAGE, sort_action="native",
+                    filter_action="native",
+                    style_table={"height": "68vh", "overflowY": "auto", "overflowX": "auto"},
                     style_cell={"fontSize": 12, "padding": "4px", "textAlign": "left", "minWidth": "60px",
-                                "width": "90px", "maxWidth": "180px", "whiteSpace": "nowrap", "overflow": "hidden",
+                                "maxWidth": "180px", "whiteSpace": "nowrap", "overflow": "hidden",
                                 "textOverflow": "ellipsis"},
                     style_header={"fontWeight": 600}),
                 html.Div([html.Button("Delete selected", id="del-row", style=btn),
                           html.Button("Export this recording (CSV)", id="export")], style={"marginTop": "6px"}),
-                dcc.Store(id="table-scroll"),
             ], id="side", style={"flex": "0 0 520px", "padding": "8px", "borderLeft": "1px solid #eee"}),
         ], style={"display": "flex", "alignItems": "stretch"}),
     ], style={"fontFamily": "-apple-system, Segoe UI, Helvetica, Arial, sans-serif"})
@@ -927,6 +974,7 @@ def init_tagger(server):
         Output("zoom", "data"), Output("sel", "data"), Output("tools", "children"), Output("nav-admin", "children"),
         Input("url", "search"), State("allfiles", "value"))
     def load(search, allf):
+        _note_load(search)
         q = parse_qs((search or "").lstrip("?"))
         try:
             rec_id = int(q.get("rec", [0])[0])
@@ -1005,34 +1053,24 @@ def init_tagger(server):
 
     # ------------------------------------------------------------ polling for other users' edits
     @app.callback(Output("events", "data", allow_duplicate=True), Output("rev", "data", allow_duplicate=True),
+                  Output("authors", "options", allow_duplicate=True), Output("authors", "value", allow_duplicate=True),
                   Input("poll", "n_intervals"), State("ctx", "data"), State("rev", "data"),
+                  State("authors", "options"), State("authors", "value"),
                   prevent_initial_call=True)
-    def poll(_, ctx, rev):
+    def poll(_, ctx, rev, opts, val):
         if not ctx:
-            return no_update, no_update
+            return no_update, no_update, no_update, no_update
         cur = A.revision(ctx["set_id"])
         if cur == rev:
-            return no_update, no_update
-        return fetch_events(ctx), cur      # the author list follows in authors_sync
-
-    # ------------------------------------------------------------ "Show events by" follows new authors
-    # The author filter used to be filled only when the page loaded. On a set with no events yet (or when
-    # someone tagged for the first time) the new author was not ticked, so freshly added events were saved
-    # but filtered out of the plot until the next page load. Any author not seen before is now ticked as it
-    # appears; authors you untick yourself stay unticked.
-    @app.callback(Output("authors", "options", allow_duplicate=True), Output("authors", "value", allow_duplicate=True),
-                  Input("events", "data"), State("ctx", "data"), State("authors", "options"),
-                  State("authors", "value"), prevent_initial_call=True)
-    def authors_sync(events, ctx, opts, val):
-        if not ctx:
-            return no_update, no_update
+            return no_update, no_update, no_update, no_update
         names = A.authors(ctx["set_id"])
-        known = [o["value"] for o in (opts or [])]
-        if names == known:
-            return no_update, no_update
-        new = [a for a in names if a not in known]
-        keep = [a for a in (val or []) if a in names]
-        return [{"label": a, "value": a} for a in names], keep + [a for a in new if a not in keep]
+        known = {o["value"] for o in (opts or [])}
+        if known == set(names):
+            return fetch_events(ctx), cur, no_update, no_update
+        # new authors arrive ticked; authors you unticked stay unticked
+        val = [a for a in (val or []) if a in names] + [a for a in names if a not in known]
+        return fetch_events(ctx), cur, [{"label": a, "value": a} for a in names], val
+
 
     # ------------------------------------------------------------ pan mode
     @app.callback(Output("drag", "data"), Output("pan-mode", "className"),
@@ -1062,9 +1100,10 @@ def init_tagger(server):
                   Input("events", "data"), Input("window", "data"), Input("nav", "data"), Input("zoom", "data"),
                   Input("click", "data"), Input("vis", "value"), Input("mode", "value"), Input("sel", "data"),
                   Input("opts", "value"), Input("authors", "value"), Input("budget", "value"), Input("drag", "data"),
-                  State("ctx", "data"), State("rev", "data"), State("allfiles", "value"), State("panst", "data"))
+                  State("ctx", "data"), State("rev", "data"), State("allfiles", "value"), State("panst", "data"),
+                  State("authors", "options"))
     def render(events, window, nav, zoom, click, vis, mode, sel, opts, authors_on, budget, drag, ctx, rev, allf,
-               panst):
+               panst, author_opts):
         if not ctx or not window:
             return go.Figure(), None
         opts = opts or []
@@ -1073,7 +1112,8 @@ def init_tagger(server):
         fig, tmap = build_figure(ctx, segs, evs, window, zoom or {}, click, vis or [], mode, sel,
                                  "long" in opts, authors_on, "author" in opts, int(budget or 8000),
                                  allf=bool(allf), drag=drag or "zoom",
-                                 paused=(panst or {}).get("prev") if drag == "pan" else None)
+                                 paused=(panst or {}).get("prev") if drag == "pan" else None,
+                                 authors_listed=[o["value"] for o in (author_opts or [])])
         fig.update_layout(uirevision=f"{'all' if allf else ctx['rec_id']}-{nav}")
         return fig, tmap
 
@@ -1095,32 +1135,6 @@ def init_tagger(server):
             title += f"  ·  {n_win} window(s) not tagged yet"
         idx = [i for i, r in enumerate(rows_) if r["id"] == sel]
         return rows_, idx, table_columns(rows_, bool(allf)), title
-
-    # keep the selected row visible in the scrolling table (Prev/Next event, Edit mode, clicks on the plot)
-    app.clientside_callback(
-        """function (selected) {
-            setTimeout(function () {
-                const box = document.getElementById('table');
-                const inp = box && box.querySelector('td.dash-select-cell input:checked');
-                const tr = inp && inp.closest('tr');
-                if (!tr) return;
-                const scroller = (function (el) {
-                    while (el && el !== box) {
-                        const s = getComputedStyle(el);
-                        if ((s.overflowY === 'scroll' || s.overflowY === 'auto') && el.scrollHeight > el.clientHeight)
-                            return el;
-                        el = el.parentElement;
-                    }
-                    return null;
-                })(tr.parentElement);
-                if (!scroller) return;
-                const r = tr.getBoundingClientRect(), b = scroller.getBoundingClientRect();
-                if (r.top < b.top || r.bottom > b.bottom)
-                    scroller.scrollTop += (r.top - b.top) - scroller.clientHeight / 3;
-            }, 80);
-            return null;
-        }""",
-        Output("table-scroll", "data"), Input("table", "selected_rows"), prevent_initial_call=True)
 
     # ------------------------------------------------------------ helpers for writes
     def _guard(ctx):
@@ -1521,4 +1535,13 @@ def init_tagger(server):
         vis = sorted(set(vis or []) | {ro, rr, re_})
         return ctx, "Channel roles saved for this recording (also used by the NN).", vis
 
+    # Dash prepares itself (script list etc.) on the first request a web worker gets, and flags that as done
+    # before it is finished. With several threads per worker, a second request in that moment was answered
+    # with "dash is not a registered library" and the page stayed blank. Do it now, before any request.
+    try:
+        with server.test_request_context("/tagger/"):
+            app._setup_server()
+    except Exception as e:  # noqa: BLE001  (private Dash API: fall back to Dash's own lazy setup)
+        import logging
+        logging.getLogger("nanotag.tagger").warning("Dash early setup skipped: %s", e)
     return app

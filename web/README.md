@@ -49,11 +49,11 @@ the old ufw rule. `update.sh` alone keeps whatever port the env file already has
 
 ```bash
 # on your laptop
-scp nanotag-0.1.11.tar.gz oguz@ANIServer:~
+scp nanotag-0.1.12.tar.gz oguz@ANIServer:~
 
 # on ANIServer
-tar xzf nanotag-0.1.11.tar.gz
-cd nanotag-0.1.11
+tar xzf nanotag-0.1.12.tar.gz
+cd nanotag-0.1.12
 sudo ./deploy/install.sh --allow-all --import-root /home/oguz/NanoporeTagging
 ```
 
@@ -225,10 +225,11 @@ An annotation set is a named collection of events across all recordings of the e
   - "Color markers by author" and the author filter show who tagged what.
   - The events table shows only columns that have values, so imported window lists show their
     window start/end, and a **status** column says *window only*, *partial* or *tagged*. It is one
-    scrolling list with a fixed header (no 25-row pages), so every event of the set — also in the
-    all-files view — can be reached; the selected event is kept in view.
-  - New authors appear in the author filter ("Show events by") as soon as they tag, so events added
-    to a set that had none yet are drawn at once. Authors you untick stay unticked.
+    scrolling list (no 25-row pages), so every event of the set — also in the all-files view — can be
+    reached with the table's scrollbar.
+  - "Show events by" hides only authors you untick: events from an author who is not in the list yet
+    (the first events of an empty set, or a colleague who just started) are always drawn, and new
+    authors join the list ticked.
   - **Show all files of the experiment** (tick box above the graph, off by default) lays every
     recording end to end, labelled by run and condition, with the table listing every file's events.
     Everything works there too — add events and windows, delete, drag guides, edit notes; each change
@@ -314,6 +315,7 @@ All users can see and edit everything. An admin can:
 | Export everything (move server) | Admin page → **📦 Export data and configuration**, or `sudo nanotag-admin export-site [--with-zarr] [--with-abf]` |
 | Import from another server | `sudo ./deploy/migrate-from.sh you@oldserver [--with-abf]` or `sudo ./deploy/migrate-from.sh bundle.tar` |
 | Self-check | `sudo nanotag-admin check` |
+| Tagger problems | `sudo journalctl -u nanotag-web --since "1 hour ago" \| grep -E "browser\|tagger:"` — the Tagger page sends its browser errors to this log, and a page that keeps reloading itself is reported there |
 | Logs | `journalctl -u nanotag-web -f` · `journalctl -u nanotag-worker -f` |
 | Restart | `sudo systemctl restart nanotag-web nanotag-worker` |
 | Settings | `/etc/nanotag/nanotag.env` (port, parallel jobs `NANOTAG_WORKERS`, import folders), then restart |
