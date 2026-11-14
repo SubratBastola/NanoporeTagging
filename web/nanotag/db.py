@@ -12,7 +12,7 @@ from contextlib import contextmanager
 
 from .config import cfg
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS users (
@@ -234,7 +234,19 @@ def migrate(con=None):
             if "source_path" not in cols:
                 con.execute("ALTER TABLE recordings ADD COLUMN source_path TEXT")
             con.execute("PRAGMA user_version=2")
-        # future migrations: if v < 3: ...
+        if v < 3:
+            # v3: friendly names for clusters in a clustering report ("C0 (Full)"). A new table only;
+            # no existing table changes, so older releases simply ignore it.
+            con.execute("""CREATE TABLE IF NOT EXISTS cluster_names (
+                               run_id     INTEGER NOT NULL REFERENCES cluster_runs(id) ON DELETE CASCADE,
+                               k          INTEGER NOT NULL,
+                               cluster    INTEGER NOT NULL,
+                               name       TEXT NOT NULL,
+                               updated_by TEXT,
+                               updated_at REAL,
+                               PRIMARY KEY (run_id, k, cluster))""")
+            con.execute("PRAGMA user_version=3")
+        # future migrations: if v < 4: ...
         return con.execute("PRAGMA user_version").fetchone()[0]
     finally:
         if own:

@@ -151,3 +151,9 @@ table.t tr.off td { color:#9ca3af; }
 .card.danger { border-color:#fca5a5; }
 .minibtn { font-size:12px; padding:2px 8px; }
 .pathbox { width:100%; max-width:720px; font-family:ui-monospace,Menlo,Consolas,monospace; }
+
+/* ---- sortable column headings (Experiments list) ---- */
+table.t th.sortable { cursor: pointer; user-select: none; }
+table.t th.sortable:hover { color: var(--accent); }
+table.t th.sortable .arrow { color: #9ca3af; font-size: 11px; }
+table.t th.sortable.sorted .arrow { color: var(--accent); }

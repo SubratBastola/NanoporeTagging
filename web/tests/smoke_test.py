@@ -406,6 +406,27 @@ def run_checks(tmp):
         lab = labels.merge(nn_df[["file_name", "event_id", "duration"]], on=["file_name", "event_id"])
         print("  mean duration per cluster:", lab.groupby("cluster")["duration"].mean().round(3).to_dict())
 
+    # ---- Experiments list columns, Reports page, friendly cluster names in the report
+    page = s.get(BASE + "/experiments").text
+    for col in ("<th>Annotations</th>", ">Reports</th>", ">Creator</th>"):
+        assert col in page, col
+    assert "Sensor / analytes / solution" not in page
+    assert re.search(r'<tr class="exprow" data-reports="1" data-created="[\d.]+" data-creator="admin">', page), "exprow"
+    rp = ok(s.get(BASE + "/reports"), "reports page").text
+    assert "smoke run" in rp and f"/cluster/{run_id}/report" in rp and "Smoke SiO2" in rp
+    assert "report_names.js" in rep.text and '"names": {}' in rep.text
+    assert "report_names.js" not in (tmp / "jobs" / f"cluster_run_{run_id}" / "cluster_report.html").read_text()
+    nm = ok(s.post(f"{BASE}/api/cluster/{run_id}/names", json={"k": 2, "cluster": 0, "name": "  Full </script> "}), "name")
+    assert nm.json()["names"] == {"2": {"0": "Full </script>"}}, nm.json()
+    rep2 = s.get(f"{BASE}/cluster/{run_id}/report").text
+    assert '"Full <\\/script>"' in rep2 and rep2.count("</body>") == 1
+    assert s.post(f"{BASE}/api/cluster/{run_id}/names", json={"k": 2, "cluster": 2, "name": "x"}).status_code == 400
+    assert s.post(f"{BASE}/api/cluster/999999/names", json={"k": 2, "cluster": 0, "name": "x"}).status_code == 404
+    ok(alice.post(f"{BASE}/api/cluster/{run_id}/names", json={"k": 2, "cluster": 1, "name": "Partial 1"}), "alice names")
+    nm = ok(s.post(f"{BASE}/api/cluster/{run_id}/names", json={"k": 2, "cluster": 0, "name": ""}), "clear name")
+    assert nm.json()["names"] == {"2": {"1": "Partial 1"}}, nm.json()
+    print("experiments columns, reports page, cluster names ok")
+
     # ---- exports + bundle round trip
     for q in ({"fmt": "csv"}, {"fmt": "xlsx"}, {"fmt": "csv", "audit": 1}, {"layout": "zip"}):
         ok(s.get(f"{BASE}/sets/{sid}/export", params=q), f"export {q}")
@@ -620,7 +641,7 @@ def run_checks(tmp):
     wait_jobs(s, exp_id)
     last_job = s.get(BASE + "/api/jobs").json()["jobs"][0]["id"]
     for path in ["/experiments", f"/experiments/{exp_id}", f"/experiments/{new_id}", "/jobs", f"/jobs/{last_job}", "/models",
-                 "/admin", "/account", "/files", f"/files?path={inc}", "/help", "/import", f"/experiments/delete?ids={exp_id}", f"/tagger/?rec={rid}&set={sid}"]:
+                 "/admin", "/account", "/files", "/reports", f"/files?path={inc}", "/help", "/import", f"/experiments/delete?ids={exp_id}", f"/tagger/?rec={rid}&set={sid}"]:
         r = ok(s.get(BASE + path), path)
         assert "Traceback" not in r.text
     print("all pages render")

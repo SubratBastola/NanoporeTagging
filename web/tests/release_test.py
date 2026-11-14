@@ -348,7 +348,8 @@ print(rid)
         assert all(r["status"] == "ready" for r in info["recordings"]), info["recordings"]
         assert {x["name"]: x["n_events"] for x in info["sets"]} == n_events_by_set, info["sets"]
         assert a.get(f"{dst.base}/experiments/{exp_id}").ok
-        assert sa.get(f"{dst.base}/cluster/{run_id}/report").text == "<html>report</html>"
+        # the report file is served as written, followed by the friendly-cluster-names script
+        assert sa.get(f"{dst.base}/cluster/{run_id}/report").text.startswith("<html>report</html><script>")
         # paths point into the new data folder
         con = sqlite3.connect(dst.data / "db" / "nanotag.sqlite3")
         paths = [r[0] for r in con.execute("SELECT abf_path FROM recordings")]

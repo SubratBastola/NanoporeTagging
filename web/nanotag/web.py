@@ -377,9 +377,25 @@ def _register_routes(app):
             stats = {r["experiment_id"]: r for r in rows(con, """SELECT experiment_id, COUNT(*) AS n,
                      SUM(COALESCE(size_bytes,0)) AS bytes, SUM(status='ready') AS ready
                      FROM recordings GROUP BY experiment_id""")}
+            n_sets = {r["experiment_id"]: r["n"] for r in rows(con, """SELECT experiment_id, COUNT(*) AS n
+                      FROM annotation_sets GROUP BY experiment_id""")}
+            n_reports = {r["experiment_id"]: r["n"] for r in rows(con, """SELECT experiment_id, COUNT(*) AS n
+                         FROM cluster_runs WHERE status='done' GROUP BY experiment_id""")}
         deletable = {e["id"] for e in exps if auth.can_delete_experiment(current_user, e)}
         return render_template("experiments.html", exps=exps, stats=stats, deletable=deletable,
+                               n_sets=n_sets, n_reports=n_reports,
                                roots=[str(r) for r in c.IMPORT_ROOTS])
+
+    @app.get("/reports")
+    def reports_page():
+        """Every finished clustering run (= one HTML report) of the experiments this user may see."""
+        exps = {e["id"]: e for e in auth.visible_experiments(current_user)}
+        with db() as con:
+            runs = [r for r in rows(con, "SELECT * FROM cluster_runs WHERE status='done' ORDER BY created_at DESC, id DESC")
+                    if r["experiment_id"] in exps]
+        for r in runs:
+            r["experiment"] = exps[r["experiment_id"]]["name"]
+        return render_template("reports.html", runs=runs)
 
     @app.post("/experiments/new")
     def experiment_new():
@@ -1024,7 +1040,47 @@ def _register_routes(app):
         p = Path(run["out_dir"] or "") / "cluster_report.html"
         if not p.exists():
             abort(404)
-        return send_file(p, mimetype="text/html")
+        # The report file itself is never changed. The friendly cluster names and the small script that
+        # shows / edits them in the report's tables are added to the page as it is served.
+        doc = p.read_text(encoding="utf-8", errors="replace")
+        boot = json.dumps({"run_id": run_id, "names": _cluster_names(run_id)}).replace("</", "<\\/")
+        extra = (f"<script>window.NANOTAG_REPORT = {boot};</script>\n"
+                 f"<script src=\"{url_for('static', filename='report_names.js', v=c.VERSION)}\"></script>\n")
+        i = doc.rfind("</body>")
+        doc = doc[:i] + extra + doc[i:] if i >= 0 else doc + extra
+        return Response(doc, mimetype="text/html")
+
+    def _cluster_names(run_id):
+        """{"<K>": {"<cluster index>": "friendly name"}} for one clustering run."""
+        out = {}
+        with db() as con:
+            for r in rows(con, "SELECT k, cluster, name FROM cluster_names WHERE run_id=? ORDER BY k, cluster",
+                          (run_id,)):
+                out.setdefault(str(r["k"]), {})[str(r["cluster"])] = r["name"]
+        return out
+
+    @app.post("/api/cluster/<int:run_id>/names")
+    def api_cluster_name(run_id):
+        """Set (or, with an empty name, clear) the friendly name of cluster C<cluster> at one K."""
+        _run_or_404(run_id)
+        d = request.get_json(silent=True) or {}
+        try:
+            k, cl = int(d.get("k")), int(d.get("cluster"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "k and cluster must be numbers"}), 400
+        if not (1 <= k <= 100 and 0 <= cl < k):
+            return jsonify({"error": "no such cluster"}), 400
+        name = " ".join(str(d.get("name") or "").split())[:60]
+        with db() as con, tx(con):
+            if name:
+                con.execute("""INSERT INTO cluster_names(run_id, k, cluster, name, updated_by, updated_at)
+                               VALUES (?,?,?,?,?,?)
+                               ON CONFLICT(run_id, k, cluster) DO UPDATE SET name=excluded.name,
+                               updated_by=excluded.updated_by, updated_at=excluded.updated_at""",
+                            (run_id, k, cl, name, current_user.username, now()))
+            else:
+                con.execute("DELETE FROM cluster_names WHERE run_id=? AND k=? AND cluster=?", (run_id, k, cl))
+        return jsonify({"ok": True, "names": _cluster_names(run_id)})
 
     @app.get("/cluster/<int:run_id>/download.zip")
     def cluster_zip(run_id):

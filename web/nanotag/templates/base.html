@@ -17,6 +17,7 @@
     <div class="sideuser">👤 {{ current_user.username }}{% if current_user.is_admin %} · admin{% endif %}</div>
     <nav class="sidenav">
       <a href="{{ url_for('experiments') }}" class="{{ 'on' if p.startswith('/experiments') or p == '/' }}">🧪 Experiments</a>
+      <a href="{{ url_for('reports_page') }}" class="{{ 'on' if p.startswith('/reports') }}">📈 Reports</a>
       <a href="{{ url_for('import_page') }}" class="{{ 'on' if p.startswith('/import') }}">📂 Import folder</a>
       <a href="{{ url_for('files_page') }}" class="{{ 'on' if p.startswith('/files') }}">📁 Files</a>
       <a href="{{ url_for('jobs_page') }}" class="{{ 'on' if p.startswith('/jobs') }}">⏱ Jobs</a>

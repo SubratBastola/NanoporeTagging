@@ -54,17 +54,19 @@
   </div>
   {% endif %}
   <table class="t">
-    <tr><th>{% if deletable %}<input type="checkbox" id="expall" title="select all you may delete">{% endif %}</th><th>Name</th><th>Recordings</th><th>Size</th><th>Sensor / analytes / solution</th><th>Created</th><th>Go to</th></tr>
+    <tr><th>{% if deletable %}<input type="checkbox" id="expall" title="select all you may delete">{% endif %}</th><th>Name</th><th>Recordings</th><th>Size</th><th>Annotations</th><th class="sortable" data-sort="reports" data-type="num" title="Click to sort">Reports</th><th class="sortable" data-sort="created" data-type="num" title="Click to sort">Created</th><th class="sortable" data-sort="creator" data-type="text" title="Click to sort">Creator</th><th>Go to</th></tr>
     {% for e in exps %}{% set s = stats.get(e.id) %}
-    <tr>
+    <tr class="exprow" data-reports="{{ n_reports.get(e.id, 0) }}" data-created="{{ e.created_at or 0 }}" data-creator="{{ (e.created_by or '')|lower }}">
       <td>{% if e.id in deletable %}<input type="checkbox" name="ids" value="{{ e.id }}" class="expsel">{% endif %}</td>
       <td><a href="{{ url_for('experiment', exp_id=e.id) }}"><b>{{ e.name }}</b></a>
         {% if e.restricted %}<span class="badge locked">restricted</span>{% endif %}
         <div class="muted small">{{ e.description }}</div></td>
       <td>{{ s.ready if s else 0 }} / {{ s.n if s else 0 }} ready</td>
       <td>{{ fmt_bytes(s.bytes) if s else '' }}</td>
-      <td class="small">{{ e.sensor }} · {{ e.analytes }} · {{ e.solution }}</td>
-      <td class="small">{{ fmt_ts(e.created_at) }}<br>{{ e.created_by }}</td>
+      <td>{{ n_sets.get(e.id, 0) }}</td>
+      <td>{{ n_reports.get(e.id, 0) }}</td>
+      <td class="small">{{ fmt_ts(e.created_at) }}</td>
+      <td class="small">{{ e.created_by }}</td>
       <td class="row">
         <a class="btn primary small" href="{{ url_for('experiment', exp_id=e.id) }}#recordings">Open</a>
         <a class="btn small" href="{{ url_for('experiment', exp_id=e.id) }}#recordings">➕ Files</a>
@@ -77,7 +79,7 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="7" class="muted">No experiments yet — <a href="{{ url_for('import_page') }}">import a folder</a>
+    <tr><td colspan="9" class="muted">No experiments yet — <a href="{{ url_for('import_page') }}">import a folder</a>
       or create one below.</td></tr>
     {% endfor %}
   </table>
@@ -117,6 +119,40 @@
   boxes().forEach(b => b.onchange = upd);
   const all = document.getElementById('expall');
   if (all) all.onchange = () => { boxes().forEach(b => b.checked = all.checked); upd(); };
+})();
+// ---- sort the list by Reports / Created / Creator (click a column heading; click again to reverse)
+(() => {
+  const heads = Array.from(document.querySelectorAll('th.sortable'));
+  const rowsOf = () => Array.from(document.querySelectorAll('tr.exprow'));
+  if (!heads.length || !rowsOf().length) return;
+  const KEY = 'nanotag.expsort';
+  let cur = {col: 'created', dir: -1};                 // the list arrives newest first
+  const mark = () => heads.forEach(h => {
+    let a = h.querySelector('.arrow');
+    if (!a) { a = document.createElement('span'); a.className = 'arrow'; h.appendChild(a); }
+    a.textContent = h.dataset.sort === cur.col ? (cur.dir > 0 ? ' ▲' : ' ▼') : ' ↕';
+    h.classList.toggle('sorted', h.dataset.sort === cur.col);
+  });
+  const apply = () => {
+    const h = heads.find(x => x.dataset.sort === cur.col);
+    if (!h) return;
+    const num = h.dataset.type === 'num', rs = rowsOf(), parent = rs[0].parentNode;
+    rs.map((r, i) => ({r, i, v: num ? parseFloat(r.dataset[cur.col]) || 0 : (r.dataset[cur.col] || '')}))
+      .sort((a, b) => (num ? a.v - b.v : a.v.localeCompare(b.v)) * cur.dir || a.i - b.i)
+      .forEach(x => parent.appendChild(x.r));
+    mark();
+  };
+  heads.forEach(h => h.addEventListener('click', () => {
+    cur = h.dataset.sort === cur.col ? {col: cur.col, dir: -cur.dir}
+                                     : {col: h.dataset.sort, dir: h.dataset.sort === 'creator' ? 1 : -1};
+    try { sessionStorage.setItem(KEY, JSON.stringify(cur)); } catch (e) {}
+    apply();
+  }));
+  try {
+    const s = JSON.parse(sessionStorage.getItem(KEY) || 'null');
+    if (s && heads.some(h => h.dataset.sort === s.col) && (s.dir === 1 || s.dir === -1)) { cur = s; apply(); }
+  } catch (e) {}
+  mark();
 })();
 setupUploader('bz', 'bf', 'bl', {purpose: 'bundle'}, () => setTimeout(() => location.href = '/jobs', 1500));
 setupUploader('xz', 'xf', 'xl', {purpose: 'abf', experiment_id: 'auto'}, () => setTimeout(() => location.reload(), 1200));

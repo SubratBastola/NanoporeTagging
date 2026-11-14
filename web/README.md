@@ -49,11 +49,11 @@ the old ufw rule. `update.sh` alone keeps whatever port the env file already has
 
 ```bash
 # on your laptop
-scp nanotag-0.1.12.tar.gz oguz@ANIServer:~
+scp nanotag-0.1.13.tar.gz oguz@ANIServer:~
 
 # on ANIServer
-tar xzf nanotag-0.1.12.tar.gz
-cd nanotag-0.1.12
+tar xzf nanotag-0.1.13.tar.gz
+cd nanotag-0.1.13
 sudo ./deploy/install.sh --allow-all --import-root /home/oguz/NanoporeTagging
 ```
 
@@ -103,13 +103,16 @@ or nginx in front with a certificate for HTTPS.
 ## 2. Everyday use
 
 Everything starts from the **menu in the upper-left corner** of every page, including the Tagger:
-🧪 Experiments · 📂 Import folder · 📁 Files · ⏱ Jobs · 🧠 Models · ⚙ Admin · users (admins only) · ❓ Help ·
+🧪 Experiments · 📈 Reports (not in the Tagger's short menu) · 📂 Import folder · 📁 Files · ⏱ Jobs · 🧠 Models · ⚙ Admin · users (admins only) · ❓ Help ·
 🔑 Change password · 🚪 Log out. Below it is a list of **tools for the page you are on**. On an experiment
 page, for example: Add ABF files, Import event CSV, Open Tagger, Run neural network, Run clustering,
 Export, Jobs, Settings.
 
 - **Experiments (home):** drop ABF files straight onto the page. The experiment is **worked out from the
-  file name** and created if needed (see below). There are also one-click buttons on each experiment row.
+  file name** and created if needed (see below). There are also one-click buttons on each experiment row. The list shows
+  each experiment's number of annotation sets and HTML cluster reports and its creator; click the
+  **Reports**, **Created** or **Creator** heading to sort by it (click again to reverse).
+- **📈 Reports** lists every HTML cluster report with its experiment, newest first.
 - **Experiment pages** have tabs:
   **Recordings · Annotations · Neural network · Clustering · Export · Jobs · Settings & access**.
 - **📁 Files** is a browser for the server folders NanoTag can read. From it you can:
@@ -272,7 +275,11 @@ A run started by mistake can be stopped: **⏹ Stop** on its row (Clustering res
 
 Outputs:
 
-- the interactive **HTML report**;
+- the interactive **HTML report**. In its K Breakdown table, the small ✎ next to a cluster gives it a
+  friendly name, shown in parentheses in the report's tables — `C0 (Full)`, `C1 (Partial 1)` — for
+  everyone who opens the report from NanoTag (Enter saves, Esc cancels, an empty name removes it).
+  Names belong to one K column: C0 at K=3 is not the same cluster as C0 at K=4. The figures (Sankey
+  and the others) and the downloaded files keep C0, C1, …;
 - a ZIP with every file the desktop "Save Results" writes;
 - a labels CSV that maps each event to its cluster.
 
@@ -425,8 +432,8 @@ the design review, kept here for a later decision.
    filtered signal. The desktop tool interpolated the full-rate filtered signal. The difference is
    negligible at a 100 Hz bandwidth.
 5. Not yet in the web version: the clustering GUI's interactive Point Inspector (manual exclusions),
-   folder comparison and custom cluster names. The HTML report's interactive 3D view and "Explore
-   other K" tab are included.
+   and folder comparison. The HTML report's interactive 3D view and "Explore other K" tab are
+   included, and clusters can be given friendly names in the report's tables (not in its figures).
 
 ## Uninstall
 

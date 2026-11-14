@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Reports{% endblock %}
+{% block content %}
+<h1>Reports</h1>
+<p class="muted small">Every HTML cluster report, newest first, with the experiment it belongs to.</p>
+<div class="card">
+  <table class="t">
+    <tr><th>Report</th><th>Experiment</th><th>Final K</th><th>Events</th><th>Created</th><th>Creator</th></tr>
+    {% for r in runs %}
+    <tr>
+      <td><a href="{{ url_for('cluster_report', run_id=r.id) }}" target="_blank"><b>📈 {{ r.name }}</b></a></td>
+      <td><a href="{{ url_for('experiment', exp_id=r.experiment_id) }}#clustering">{{ r.experiment }}</a></td>
+      <td>{{ r.final_k or '' }}</td>
+      <td>{{ r.n_events or '' }}</td>
+      <td class="small">{{ fmt_ts(r.created_at) }}</td>
+      <td class="small">{{ r.created_by }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">No reports yet — a report appears here when a clustering run finishes.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}
