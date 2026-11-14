@@ -49,11 +49,11 @@ the old ufw rule. `update.sh` alone keeps whatever port the env file already has
 
 ```bash
 # on your laptop
-scp nanotag-0.1.14.tar.gz oguz@ANIServer:~
+scp nanotag-0.1.15.tar.gz oguz@ANIServer:~
 
 # on ANIServer
-tar xzf nanotag-0.1.14.tar.gz
-cd nanotag-0.1.14
+tar xzf nanotag-0.1.15.tar.gz
+cd nanotag-0.1.15
 sudo ./deploy/install.sh --allow-all --import-root /home/oguz/NanoporeTagging
 ```
 
@@ -282,7 +282,8 @@ Outputs:
   per-K pies) and therefore in **Save as PDF**. Names belong to one K column: C0 at K=3 is not the
   same cluster as C0 at K=4. The Sankey plot (it shows no cluster names) and the downloaded files
   are unchanged; the plots are redrawn from the run's saved files when the report is opened, the
-  clustering is not run again;
+  clustering is not run again. In the K Selection figure only the pie is redrawn (the BIC curve is
+  kept from the original picture), so the pie shows the names for every report;
 - a ZIP with every file the desktop "Save Results" writes;
 - a labels CSV that maps each event to its cluster.
 
