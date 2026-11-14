@@ -49,11 +49,11 @@ the old ufw rule. `update.sh` alone keeps whatever port the env file already has
 
 ```bash
 # on your laptop
-scp nanotag-0.1.13.tar.gz oguz@ANIServer:~
+scp nanotag-0.1.14.tar.gz oguz@ANIServer:~
 
 # on ANIServer
-tar xzf nanotag-0.1.13.tar.gz
-cd nanotag-0.1.13
+tar xzf nanotag-0.1.14.tar.gz
+cd nanotag-0.1.14
 sudo ./deploy/install.sh --allow-all --import-root /home/oguz/NanoporeTagging
 ```
 
@@ -276,10 +276,13 @@ A run started by mistake can be stopped: **⏹ Stop** on its row (Clustering res
 Outputs:
 
 - the interactive **HTML report**. In its K Breakdown table, the small ✎ next to a cluster gives it a
-  friendly name, shown in parentheses in the report's tables — `C0 (Full)`, `C1 (Partial 1)` — for
-  everyone who opens the report from NanoTag (Enter saves, Esc cancels, an empty name removes it).
-  Names belong to one K column: C0 at K=3 is not the same cluster as C0 at K=4. The figures (Sankey
-  and the others) and the downloaded files keep C0, C1, …;
+  friendly name, shown in parentheses — `C0 (Full)`, `C1 (Partial 1)` — for everyone who opens the
+  report from NanoTag (Enter saves, Esc cancels, an empty name removes it). The names appear in the
+  report's tables, in its plots (K Selection pie, Feature Relationships, both 3D legends, the
+  per-K pies) and therefore in **Save as PDF**. Names belong to one K column: C0 at K=3 is not the
+  same cluster as C0 at K=4. The Sankey plot (it shows no cluster names) and the downloaded files
+  are unchanged; the plots are redrawn from the run's saved files when the report is opened, the
+  clustering is not run again;
 - a ZIP with every file the desktop "Save Results" writes;
 - a labels CSV that maps each event to its cluster.
 
@@ -433,7 +436,7 @@ the design review, kept here for a later decision.
    negligible at a 100 Hz bandwidth.
 5. Not yet in the web version: the clustering GUI's interactive Point Inspector (manual exclusions),
    and folder comparison. The HTML report's interactive 3D view and "Explore other K" tab are
-   included, and clusters can be given friendly names in the report's tables (not in its figures).
+   included, and clusters can be given friendly names in the report's tables and plots.
 
 ## Uninstall
 

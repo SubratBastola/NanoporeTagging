@@ -425,7 +425,19 @@ def run_checks(tmp):
     ok(alice.post(f"{BASE}/api/cluster/{run_id}/names", json={"k": 2, "cluster": 1, "name": "Partial 1"}), "alice names")
     nm = ok(s.post(f"{BASE}/api/cluster/{run_id}/names", json={"k": 2, "cluster": 0, "name": ""}), "clear name")
     assert nm.json()["names"] == {"2": {"1": "Partial 1"}}, nm.json()
-    print("experiments columns, reports page, cluster names ok")
+    # names also go into the report's figures (redrawn from the run's saved files; Sankey untouched)
+    fk = run["final_k"]
+    assert sorted(nm.json()["figs"]["pies"]) == ["2"] and "pairs" not in nm.json()["figs"], nm.json()["figs"].keys()
+    figs = ok(s.post(f"{BASE}/api/cluster/{run_id}/names", json={"k": fk, "cluster": 0, "name": "Full"}), "final-K name").json()["figs"]
+    assert figs["skipped"] == [] and sorted(figs["pies"]) == sorted({"2", str(fk)}), (figs["skipped"], figs["pies"].keys())
+    disk = (tmp / "jobs" / f"cluster_run_{run_id}" / "cluster_report.html").read_text()
+    for kind in ("ksel", "pairs"):
+        assert figs[kind].startswith("iVBOR") and figs[kind] not in disk, kind
+    rep3 = s.get(f"{BASE}/cluster/{run_id}/report").text
+    assert figs["pairs"] in rep3 and f'"final_k": {fk}' in rep3 and rep3.startswith(disk[:disk.rfind("</body>")])
+    figs = ok(s.post(f"{BASE}/api/cluster/{run_id}/names", json={"k": fk, "cluster": 0, "name": ""}), "clear").json()["figs"]
+    assert "ksel" not in figs and "pairs" not in figs and (fk == 2 or str(fk) not in figs["pies"])
+    print("experiments columns, reports page, cluster names (tables + figures) ok")
 
     # ---- exports + bundle round trip
     for q in ({"fmt": "csv"}, {"fmt": "xlsx"}, {"fmt": "csv", "audit": 1}, {"layout": "zip"}):

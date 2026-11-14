@@ -1043,7 +1043,9 @@ def _register_routes(app):
         # The report file itself is never changed. The friendly cluster names and the small script that
         # shows / edits them in the report's tables are added to the page as it is served.
         doc = p.read_text(encoding="utf-8", errors="replace")
-        boot = json.dumps({"run_id": run_id, "names": _cluster_names(run_id)}).replace("</", "<\\/")
+        names = _cluster_names(run_id)
+        boot = json.dumps({"run_id": run_id, "final_k": run["final_k"], "names": names,
+                           "figs": _named_figures(run, names)}).replace("</", "<\\/")
         extra = (f"<script>window.NANOTAG_REPORT = {boot};</script>\n"
                  f"<script src=\"{url_for('static', filename='report_names.js', v=c.VERSION)}\"></script>\n")
         i = doc.rfind("</body>")
@@ -1059,10 +1061,27 @@ def _register_routes(app):
                 out.setdefault(str(r["k"]), {})[str(r["cluster"])] = r["name"]
         return out
 
+    def _named_figures(run, names):
+        """The report's figures redrawn with the friendly names ({} if there are none). A problem here
+        never stops the report from opening: the figures then simply keep C0, C1, ..."""
+        if not names:
+            return {}
+        try:
+            from . import report_figs
+            job_log = None
+            if run.get("job_id"):
+                with db() as con:
+                    j = one(con, "SELECT log FROM jobs WHERE id=?", (run["job_id"],))
+                job_log = j["log"] if j else None
+            return report_figs.figures(run, names, job_log)
+        except Exception:
+            app.logger.exception("report figures with cluster names failed for run %s", run.get("id"))
+            return {"skipped": ["ksel", "pairs", "pies"]}
+
     @app.post("/api/cluster/<int:run_id>/names")
     def api_cluster_name(run_id):
         """Set (or, with an empty name, clear) the friendly name of cluster C<cluster> at one K."""
-        _run_or_404(run_id)
+        run = _run_or_404(run_id)
         d = request.get_json(silent=True) or {}
         try:
             k, cl = int(d.get("k")), int(d.get("cluster"))
@@ -1080,7 +1099,8 @@ def _register_routes(app):
                             (run_id, k, cl, name, current_user.username, now()))
             else:
                 con.execute("DELETE FROM cluster_names WHERE run_id=? AND k=? AND cluster=?", (run_id, k, cl))
-        return jsonify({"ok": True, "names": _cluster_names(run_id)})
+        names = _cluster_names(run_id)
+        return jsonify({"ok": True, "names": names, "figs": _named_figures(run, names)})
 
     @app.get("/cluster/<int:run_id>/download.zip")
     def cluster_zip(run_id):
